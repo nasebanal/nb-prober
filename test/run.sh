@@ -272,6 +272,7 @@ ARG_ROOT="$work/argroot"; rm -rf "$ARG_ROOT"
 out=$(env -u NB_PROBER_KEY "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
 check "the key can be the argument (service create KEY), like cloudflared" rc_is 0
 check "and is kept in the root-only file" grep -qxF "NB_PROBER_KEY=$NB_PROBER_KEY" "$ARG_ROOT/etc/nb-prober/env"
+rm -rf "$ARG_ROOT"
 check "the argument form is accepted after the options too" bash -c 'env -u NB_PROBER_KEY "$1" service create --os ubuntu --root "$2" "$3" >/dev/null 2>&1' _ "$NBP" "$ARG_ROOT" "$NB_PROBER_KEY"
 URL_ROOT="$work/urlroot"; rm -rf "$URL_ROOT"
 out=$(env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service create "$NB_PROBER_KEY" --url http://evolution.test --os ubuntu --root "$URL_ROOT" 2>&1); rc=$?
@@ -295,9 +296,25 @@ check "it is the same script" cmp -s "$NBP" "$ROOT_DIR/usr/local/bin/nb-prober"
 check "the key is not in any command line" bash -c '! grep -q "$NB_PROBER_KEY" "$1"' _ "$SHIM_DIR/args.log"
 check "it checked the key against Evolution first" test "$(count_req 'GET http://evolution.test/api/v1/probe/monitors')" -ge 1
 NEWKEY="nbp_probe1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-printf '%s' "$NEWKEY" | env -u NB_PROBER_KEY NB_PROBER_KEY="" "$NBP" service create --os ubuntu --root "$ROOT_DIR" >/dev/null 2>&1
-check "running it again with a new key replaces the key" grep -qxF "NB_PROBER_KEY=$NEWKEY" "$ROOT_DIR/etc/nb-prober/env"
+out=$(printf '%s' "$NEWKEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
+check "a service that already exists is an error, not a silent takeover" rc_is 1
+check "it says so, and names the probe that runs now" has "a service already exists on this machine (probe probe1)"
+check "it says how to replace it: delete, then create" has "nb-prober service delete"
+check "or --force" has "--force"
+check "the key was not touched" grep -qxF "NB_PROBER_KEY=$NB_PROBER_KEY" "$ROOT_DIR/etc/nb-prober/env"
+check "the new key is not printed" hasnt "BBBBBBBBBBBBBBBB"
+out=$(env -u NB_PROBER_KEY "$NBP" service create "$NEWKEY" --os ubuntu --root "$ROOT_DIR" --dry-run 2>&1); rc=$?
+check "--dry-run says it too (and writes nothing)" has "a service already exists"
+printf '%s' "$NEWKEY" | env -u NB_PROBER_KEY "$NBP" service create --force --os ubuntu --root "$ROOT_DIR" >/dev/null 2>&1
+check "--force replaces the key in one step" grep -qxF "NB_PROBER_KEY=$NEWKEY" "$ROOT_DIR/etc/nb-prober/env"
 check "and leaves one key line" test "$(grep -c '^NB_PROBER_KEY=' "$ROOT_DIR/etc/nb-prober/env")" -eq 1
+run_nbp service delete --os ubuntu --root "$ROOT_DIR"
+printf '%s' "$NEWKEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" >/dev/null 2>&1
+check "after delete, create works again with the other key" grep -qxF "NB_PROBER_KEY=$NEWKEY" "$ROOT_DIR/etc/nb-prober/env"
+MAC_EX="$work/macex"; rm -rf "$MAC_EX"
+env -u NB_PROBER_KEY "$NBP" service create "$NB_PROBER_KEY" --os macos --root "$MAC_EX" >/dev/null 2>&1
+out=$(env -u NB_PROBER_KEY "$NBP" service create "$NEWKEY" --os macos --root "$MAC_EX" 2>&1); rc=$?
+check "macOS: the same refusal, naming the probe from the plist" has "a service already exists on this machine (probe probe1)"
 
 rm -rf "$ROOT_DIR"; echo 401 > "$SHIM_DIR/list_code"
 out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?

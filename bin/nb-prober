@@ -22,6 +22,7 @@
 #   -h, --help                           show this help (with no command: the usage, exit 1)
 #   --root DIR                           service: write under DIR, skip root and the service manager (packaging, tests)
 #   -f, -n N                             service logs: follow, and how many lines to show first (default 50)
+#   --force                              service create: replace a service that already exists (without it that is an error)
 #   --os ubuntu|macos                    service: the platform (default: detected)
 #   --url URL                            Evolution's API (default https://api.assurance.nasebanal.com; same as NB_ASSURANCE_BASE_URL)
 #   --version                            show the version
@@ -60,7 +61,7 @@
 #          argument is in `ps` and in your shell history while this one command runs; the other two avoid `ps` only, and
 #          the service itself reads the key from a root-only file). It is checked against Evolution first: a refused key
 #          installs nothing.
-#          Run it again with a new key to replace the key. `delete` stops and removes the service (the state
+#          There is one service per machine: `create` refuses when one exists (it says to `delete` first, or add --force). `delete` stops and removes the service (the state
 #          directory stays: results not yet sent are kept). `status` shows the service and its last log lines;
 #          `logs [-f] [-n N]` shows the log (journalctl on Ubuntu, /var/log/nb-prober.log on macOS).
 #          `restart`, `stop` and `start` use the stored key (none is given); `stop` lasts until the next boot. Needs
@@ -133,7 +134,7 @@ STATE_ROOT="${NB_PROBER_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/nb-prob
 TICK="${NB_PROBER_TICK:-15}"
 BUFFER_MAX="${NB_PROBER_BUFFER_MAX:-10000}"
 RETRY_WAIT="${NB_PROBER_RETRY_WAIT:-0}"
-ONCE=0; DRY=0; ROOT=""; SVC_OS=""; FOLLOW=0; LOG_LINES=50; METHOD=GET; EXPECT=""; KEYWORD=""; TIMEOUT_MS=10000
+ONCE=0; DRY=0; ROOT=""; SVC_OS=""; FORCE=0; FOLLOW=0; LOG_LINES=50; METHOD=GET; EXPECT=""; KEYWORD=""; TIMEOUT_MS=10000
 UA="NASEBANAL-Prober/$VERSION (+https://www.nasebanal.com)"
 POS=()
 TMP=""
@@ -509,12 +510,33 @@ svc_need_root() {
 
 # service create: the probe's key comes from NB_PROBER_KEY or from stdin, is checked against Evolution, and then the
 # script and the service are put in place and started.
+# One service per machine, and `create` never takes one over: another key would silently stop the probe that runs now and leave its
+# monitors with "no report". An existing service is an error that says how to replace it (delete, then create), or --force to do it in one step.
+svc_refuse_if_exists() {
+  local path had=""
+  if [ "$SVC_OS" = macos ]; then path="$ROOT$SVC_PLIST"; else path="$ROOT$SVC_UNIT"; fi
+  [ -e "$path" ] || return 0
+  # the key file is readable by root only: the probe it belongs to is named when this can read it
+  if [ "$SVC_OS" = ubuntu ]; then
+    had=$(sed -n 's/^NB_PROBER_KEY=nbp_\([A-Za-z0-9]*\)_.*/\1/p' "$ROOT$SVC_ENV" 2>/dev/null | head -n1 || true)
+  else
+    had=$(sed -n 's|.*<key>NB_PROBER_KEY</key><string>nbp_\([A-Za-z0-9]*\)_.*|\1|p' "$path" 2>/dev/null | head -n1 || true)
+  fi
+  warn "a service already exists on this machine${had:+ (probe $had)}."
+  echo "To replace it, delete it first and create it again:" >&2
+  echo "  nb-prober service delete" >&2
+  echo "  nb-prober service create <key>" >&2
+  echo "(or add --force to replace it in one step; the probe that runs now stops, and its monitors report nothing until it is back)" >&2
+  exit 1
+}
+
 cmd_service_create() {
   need curl; need jq
   svc_platform
   if [ -z "$KEY" ] && [ ! -t 0 ]; then IFS= read -r KEY || true; fi
   [ -n "$KEY" ] || die "no key: give it as the argument (nb-prober service create nbp_...), pipe it in, or set NB_PROBER_KEY"
   need_key
+  [ "$FORCE" = 1 ] || svc_refuse_if_exists
   make_tmp
   if [ "$DRY" = 1 ]; then
     echo "Would create the service on $SVC_OS (nothing is written):"
@@ -730,6 +752,7 @@ while [ "$#" -gt 0 ]; do
     --dry-run)   DRY=1; shift ;;
     --root)      [ "$#" -ge 2 ] || usage; ROOT="${2%/}"; shift 2 ;;
     --root=*)    ROOT="${1#*=}"; ROOT="${ROOT%/}"; shift ;;
+    --force)     FORCE=1; shift ;;
     -f|--follow) FOLLOW=1; shift ;;
     -n)          [ "$#" -ge 2 ] || usage; LOG_LINES="$2"; shift 2 ;;
     --url)       [ "$#" -ge 2 ] || usage; API="$2"; URL_GIVEN=1; shift 2 ;;
