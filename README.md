@@ -65,6 +65,7 @@ Evolution's external monitoring runs in the cloud, so it can only reach public U
 # 1. put the script on your PATH
 git clone https://github.com/nasebanal/nb-prober.git
 nb-prober/bin/nb-prober --install      # links it into ~/.local/bin (or a directory you name); put that on your PATH
+                                       # (nb-prober --uninstall removes that link again; the service is separate: nb-prober service delete)
 
 # 2. try a check from this machine, the way a monitor would make it
 nb-prober check http://intranet.example/health
