@@ -1,0 +1,29 @@
+name: Release
+
+# A tag vX.Y.Z publishes the script as a release asset with its SHA-256, which is what Evolution's install command downloads.
+# The tag must match VERSION in bin/nb-prober, and the tests must pass on the tagged commit.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the script's version
+        run: |
+          v=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' bin/nb-prober)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match VERSION=$v in bin/nb-prober"; exit 1; }
+      - name: Tests
+        run: test/run.sh
+      - name: Checksum
+        run: cd bin && sha256sum nb-prober > nb-prober.sha256 && cat nb-prober.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" bin/nb-prober bin/nb-prober.sha256 --title "$GITHUB_REF_NAME" --generate-notes

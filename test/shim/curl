@@ -2,8 +2,8 @@
 # test/shim/curl - a test double of curl for test/run.sh. It answers what nb-prober asks of Evolution and
 # of the monitored targets from files in $SHIM_DIR, and logs what it was asked. It does not touch the network.
 #
-#   $SHIM_DIR/monitors.json      body for GET /api/v1/monitors (code: list_code, default 200)
-#   $SHIM_DIR/post_code          status for POST /api/v1/monitors/<id>/results (default 200)
+#   $SHIM_DIR/monitors.json      body for GET /api/v1/probe/monitors (code: list_code, default 200)
+#   $SHIM_DIR/post_code          status for POST /api/v1/probe/monitors/<id>/results (default 200)
 #   $SHIM_DIR/offline            exists: every Evolution call fails like a refused connection (000)
 #   $SHIM_DIR/target/<url>       a monitored target (the URL with non-alphanumerics -> _): lines
 #                                "status=200", "time=0.123" (seconds), "exit=0" (curl's exit code: 28 timeout,
@@ -51,9 +51,11 @@ case "$url" in
 esac
 # Evolution
 if [ -e "$SHIM_DIR/offline" ]; then code 000; exit 7; fi
-case "$stdin" in *"Authorization: Bearer test-token"*) echo ok >> "$SHIM_DIR/auth.log" ;; esac
+case "$stdin" in *"Authorization: Bearer ${NB_PROBER_KEY-}"*) echo ok >> "$SHIM_DIR/auth.log" ;; esac
+v=$(printf '%s' "$stdin" | sed -n 's/^header = "X-Prober-Version: \(.*\)"$/\1/p')
+[ -n "$v" ] && echo "$v" >> "$SHIM_DIR/version.log"
 case "$method $url" in
-  "GET "*/api/v1/monitors*)
+  "GET "*/api/v1/probe/monitors)
     c=$(cat "$SHIM_DIR/list_code" 2>/dev/null || echo 200)
     reply "$c" "$SHIM_DIR/monitors.json" ;;
   "POST "*/results)

@@ -6,41 +6,67 @@
 #
 # Commands:
 #   run                                  check this probe's monitors on their intervals and report, until stopped
-#   list                                 list the monitors assigned to this probe
+#   list                                 list the monitors this probe checks
 #   check <url>                          check one URL the way a monitor would, and print the outcome (reports nothing)
-#   doctor                               check the setup (tools, token, Evolution, state directory)
+#   doctor                               check the setup (tools, key, Evolution, state directory)
+#   service install [KEY]|start|stop|restart|status|logs|uninstall  run it as a service that starts at boot and restarts itself (Ubuntu: systemd, macOS: launchd)
 #   --install [DIR]                      link this script into DIR (default ~/.local/bin)
 #
 # Options:
-#   --probe NAME                         which probe this is: the `probe` name of its monitors (or NB_PROBER_NAME)
 #   --once                               run: one pass, then exit (for cron or a test)
-#   --dry-run                            run: check and print, but report nothing and keep nothing
+#   --dry-run                            run: check and print, but report nothing and keep nothing; service install: show what it would do
 #   --method GET|HEAD                    check: the request method (default GET)
 #   --expect-status CODE                 check: the status that counts as ok (default: any 2xx or 3xx)
 #   --keyword TEXT                       check: text the body must contain (GET only)
 #   --timeout-ms MS                      check: give up after MS milliseconds (default 10000)
 #   -h, --help                           show this help (with no command: the usage, exit 1)
+#   --root DIR                           service: write under DIR, skip root and the service manager (packaging, tests)
+#   -f, -n N                             service logs: follow, and how many lines to show first (default 50)
+#   --os ubuntu|macos                    service: the platform (default: detected)
+#   --url URL                            Evolution's API (default https://api.assurance.nasebanal.com; same as NB_ASSURANCE_BASE_URL,
+#                                        which `sudo` does not pass on: use this with `sudo nb-prober service install`)
 #   --version                            show the version
 #
-# How it works: a push monitor in NASEBANAL Evolution has the same settings as a cloud monitor (URL,
-# method, expected status, keyword, timeout, interval) plus a probe name. This program runs INSIDE
-# your private network: it asks Evolution for the monitors of its probe name, makes the request of each
-# one when its interval is due, and reports the outcome (ok, status code, response time, error) over
-# HTTPS. The settings come from Evolution on every pass, so a change on the monitor's screen takes
-# effect on the next one. Evolution never connects to your network: this program only makes outgoing
-# requests, and it judges a response exactly as Evolution's own checker does.
+# How it works: you register a probe in NASEBANAL Evolution and get its key. A push monitor there has the
+# same settings as a cloud monitor (URL, method, expected status, keyword, timeout, interval) plus the
+# probe that checks it. This program runs INSIDE your private network: it asks Evolution, with the
+# probe's key, for the monitors of that probe, makes the request of each one when its interval is due,
+# and reports the outcome (ok, status code, response time, error) over HTTPS. The settings come from
+# Evolution on every pass, so a change on the monitor's screen takes effect on the next one: a monitor
+# whose settings were edited is checked again at once (within a pass), not after its interval. Evolution
+# never connects to your network: this program only makes outgoing requests, and it judges a response
+# exactly as Evolution's own checker does.
 #
 # run      one pass every NB_PROBER_TICK seconds (default 15): list the monitors, check the ones
-#          that are due (a failed check is repeated once, as Evolution's own checker does), append
+#          that are due, or were edited since the last check (a failed check is repeated once, as
+#          Evolution's own checker does), append
 #          each outcome to a buffer file, then send the buffer oldest first, 100 at a time. While
 #          Evolution cannot be reached the last list of monitors is used, the buffer keeps growing and
 #          is flushed when the link returns (the newest NB_PROBER_BUFFER_MAX = 10000 per monitor are
-#          kept; Evolution accepts results up to 7 days old).
-# list     the monitors assigned to --probe: id, interval in minutes, method, state, URL.
+#          kept; Evolution accepts results up to 7 days old). Asking for the monitors is also the
+#          probe's heartbeat: Evolution shows the probe as online while it hears it (a pass must not be
+#          longer than 60 seconds).
+# list     the monitors this probe checks: id, interval in minutes, method, state, URL.
 # check    one check of <url> with the options above, to try a URL from this machine before registering
 #          a monitor. Prints the outcome as JSON. Exits 0 if the target is ok, 1 if not.
-# doctor   check the setup without reporting anything: curl and jq installed, token set, Evolution
-#          reachable and the token accepted, the state directory writable. Exits 1 if anything is flagged.
+# doctor   check the setup without reporting anything: curl and jq installed, the key set and well
+#          formed, Evolution reachable and the key accepted, the state directory writable. Exits 1 if
+#          anything is flagged.
+# service  install: `sudo nb-prober service install nbp_...` puts this script at /usr/local/bin/nb-prober
+#          and runs it as a service that starts at boot and is restarted if it dies. Ubuntu (any Linux with systemd):
+#          the key goes to /etc/nb-prober/env (only root can read it), the unit to /etc/systemd/system/nb-prober.service
+#          (a locked-down user, state in /var/lib/nb-prober). macOS: a launchd daemon, /Library/LaunchDaemons/
+#          com.nasebanal.nb-prober.plist (root-only, holds the key), running as `nobody`, state in /var/db/nb-prober,
+#          log in /var/log/nb-prober.log. The key is the argument, or comes from NB_PROBER_KEY or standard input (an
+#          argument is in `ps` and in your shell history while this one command runs; the other two avoid `ps` only, and
+#          the service itself reads the key from a root-only file). It is checked against Evolution first: a refused key
+#          installs nothing.
+#          Run it again with a new key to replace the key. `uninstall` stops and removes the service (the state
+#          directory stays: results not yet sent are kept). `status` shows the service and its last log lines;
+#          `logs [-f] [-n N]` shows the log (journalctl on Ubuntu, /var/log/nb-prober.log on macOS).
+#          `restart`, `stop` and `start` use the stored key (none is given); `stop` lasts until the next boot. Needs
+#          root, curl and jq. `--root DIR` writes the files under DIR and does not touch the service manager, and
+#          `--os ubuntu|macos` picks the platform instead of detecting it (both for packaging and tests).
 # --install  put `nb-prober` on your PATH: a symlink to this script in DIR (default ~/.local/bin,
 #          created if missing), so a `git pull` of this repository updates it. It does not replace
 #          anything it did not make, and prints the line to add if DIR is not on your PATH.
@@ -54,18 +80,19 @@
 #     unexpected_status, keyword_not_found
 #
 # Safety:
-#   - the token is never put in a command line or a log: curl reads it from stdin
+#   - the key is never put in a command line or a log: curl reads it from stdin
+#   - the key does one thing: it lets this probe list its own monitors and report their results. It
+#     cannot read anything else in Evolution; if it leaks, issue a new key (External monitoring > the probe list)
 #   - nothing is requested but Evolution (HTTPS) and the URLs of the monitors you registered
 #   - a monitor that Evolution no longer lists as push (404 / 409) has its buffer dropped
 #
 # Environment:
-#   NB_PROBER_TOKEN             an Evolution API token (a personal access token). Use a dedicated
-#                               token-only user for each probe. NB_TOKEN is read if it is not set
+#   NB_PROBER_KEY               the probe's key (nbp_...), issued when the probe is registered in Evolution
+#   NB_PROBER_LOG               write the output to this file, kept bounded: over NB_PROBER_LOG_MAX_BYTES (default 5 MiB) it is
+#                               moved to FILE.1 and a new one starts (the macOS service uses it)
 #   NB_ASSURANCE_BASE_URL       Evolution's API (default https://api.assurance.nasebanal.com)
-#   NB_ACTIVE_ORGANIZATION_ID   act in this organization (optional)
-#   NB_PROBER_NAME              the probe name, instead of --probe
 #   NB_PROBER_STATE_DIR         buffer and last-check times (default ~/.local/state/nb-prober)
-#   NB_PROBER_TICK              seconds between passes (default 15)
+#   NB_PROBER_TICK              seconds between passes (default 15, at most 60)
 #   NB_PROBER_BUFFER_MAX        results kept per monitor while Evolution is unreachable (default 10000)
 #   NB_PROBER_RETRY_WAIT        seconds before a failed check is repeated once (default 0)
 set -euo pipefail
@@ -93,15 +120,16 @@ warn() { echo "nb-prober: $*" >&2; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say() { printf '%s %s\n' "$(now)" "$*"; }
 
-PROBE="${NB_PROBER_NAME:-}"
 API="${NB_ASSURANCE_BASE_URL:-https://api.assurance.nasebanal.com}"
-TOKEN="${NB_PROBER_TOKEN:-${NB_TOKEN:-}}"
-ORG="${NB_ACTIVE_ORGANIZATION_ID:-}"
+URL_GIVEN=0; [ -z "${NB_ASSURANCE_BASE_URL-}" ] || URL_GIVEN=1   # not the default: written into the service
+KEY="${NB_PROBER_KEY:-}"
+# The key is nbp_<probe id>_<secret>: the id names the probe (and its state directory) without asking Evolution.
+PROBE=""
 STATE_ROOT="${NB_PROBER_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/nb-prober}"
 TICK="${NB_PROBER_TICK:-15}"
 BUFFER_MAX="${NB_PROBER_BUFFER_MAX:-10000}"
 RETRY_WAIT="${NB_PROBER_RETRY_WAIT:-0}"
-ONCE=0; DRY=0; METHOD=GET; EXPECT=""; KEYWORD=""; TIMEOUT_MS=10000
+ONCE=0; DRY=0; ROOT=""; SVC_OS=""; FOLLOW=0; LOG_LINES=50; METHOD=GET; EXPECT=""; KEYWORD=""; TIMEOUT_MS=10000
 UA="NASEBANAL-Prober/$VERSION (+https://www.nasebanal.com)"
 POS=()
 TMP=""
@@ -109,22 +137,23 @@ TMP=""
 LINK_KEY=""; FLUSH_WARNED=""
 
 need() { command -v "$1" >/dev/null || die "$1 is not installed"; }
-need_token() { [ -n "$TOKEN" ] || die "no token: set NB_PROBER_TOKEN (an Evolution API token)"; }
-need_probe() {
-  [ -n "$PROBE" ] || die "which probe? give --probe NAME (or set NB_PROBER_NAME)"
-  printf '%s' "$PROBE" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$' || die "invalid probe name: $PROBE (lowercase letters, digits, . _ -; up to 64)"
+need_key() {
+  [ -n "$KEY" ] || die "no key: set NB_PROBER_KEY (the key of a probe registered in Evolution)"
+  printf '%s' "$KEY" | grep -Eq '^nbp_[A-Za-z0-9]{1,64}_[A-Za-z0-9_-]{43}$' || die "NB_PROBER_KEY is not a probe key (it looks like nbp_<id>_<secret>)"
+  PROBE="${KEY#nbp_}"; PROBE="${PROBE%%_*}"
+  case "$TICK" in ""|*[!0-9]*) die "NB_PROBER_TICK is a number of seconds" ;; esac
+  [ "$TICK" -ge 1 ] && [ "$TICK" -le 60 ] || die "NB_PROBER_TICK is 1 to 60 seconds (Evolution shows the probe offline after 2 minutes without a pass)"
 }
 make_tmp() { TMP=$(mktemp -d "${TMPDIR:-/tmp}/nb-prober.XXXXXX"); trap 'rm -rf "$TMP"' EXIT; }
 
 # http METHOD URL [BODYFILE]: call Evolution. Sets HTTP_CODE (000 if unreachable) and HTTP_BODY (a file).
-# The token and the organization header go to curl on stdin, so they never appear in `ps`.
+# The key goes to curl on stdin, so it never appears in `ps`.
 HTTP_CODE=000; HTTP_BODY=""
 http() {
   local method="$1" url="$2" body="${3:-}" args cfg
   HTTP_BODY="$TMP/response.json"; : > "$HTTP_BODY"
   args=(-sS -o "$HTTP_BODY" -w '%{http_code}' --max-time 30 -X "$method" -K -)
-  cfg=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN")
-  [ -z "$ORG" ] || cfg="$cfg"$'\n'"$(printf 'header = "X-Active-Organization-Id: %s"' "$ORG")"
+  cfg=$(printf 'header = "Authorization: Bearer %s"\nheader = "X-Prober-Version: %s"' "$KEY" "$VERSION")
   if [ -n "$body" ]; then args+=(-H 'Content-Type: application/json' --data-binary "@$body"); fi
   HTTP_CODE=$(printf '%s\n' "$cfg" | curl "${args[@]}" "$url" 2>/dev/null) || HTTP_CODE=000
   [ -n "$HTTP_CODE" ] || HTTP_CODE=000
@@ -188,7 +217,7 @@ flush() {
     if ! jq -s '{results: .}' "$TMP/batch.jsonl" > "$TMP/batch.json" 2>/dev/null; then
       warn "monitor $id: unreadable buffer, dropped"; : > "$f"; return 0
     fi
-    http POST "$API/api/v1/monitors/$id/results" "$TMP/batch.json"
+    http POST "$API/api/v1/probe/monitors/$id/results" "$TMP/batch.json"
     case "$HTTP_CODE" in
       200)
         say "reported $n result(s) for $id: $(jq -r '.data | "accepted \(.accepted), duplicates \(.duplicates), rejected \(.rejected | length)"' "$HTTP_BODY" 2>/dev/null || echo ok)" ;;
@@ -201,7 +230,7 @@ flush() {
           *)
             FLUSH_WARNED="$FLUSH_WARNED|$id:$HTTP_CODE|"
             if [ "$HTTP_CODE" = 401 ] || [ "$HTTP_CODE" = 403 ]; then
-              warn "token refused (HTTP $HTTP_CODE); results stay buffered for $id ($(wc -l < "$f" | tr -d ' ') so far)"
+              warn "key refused (HTTP $HTTP_CODE); results stay buffered for $id ($(wc -l < "$f" | tr -d ' ') so far)"
             else
               warn "cannot reach Evolution (HTTP $HTTP_CODE); results stay buffered for $id ($(wc -l < "$f" | tr -d ' ') so far)"
             fi ;;
@@ -218,11 +247,11 @@ flush() {
 # Evolution cannot be reached (no answer, or a 5xx) the last list it gave is used, so checking goes
 # on and the results pile up in the buffer for the flush.
 cycle() {
-  local id name url method tmo expected keyword interval last t out f list="$STATE_ROOT/$PROBE/monitors.tsv" have=0
-  http GET "$API/api/v1/monitors?mode=push&probe=$PROBE"
+  local id name url method tmo expected keyword interval upd last seen t out f list="$STATE_ROOT/$PROBE/monitors.tsv" have=0
+  http GET "$API/api/v1/probe/monitors"
   if [ "$HTTP_CODE" = 200 ] && jq -e '.data.data' "$HTTP_BODY" >/dev/null 2>&1; then
     # One line per enabled monitor, fields joined by the unit separator (so an empty one stays empty).
-    jq -r '.data.data[] | select(.enabled) | [.id, (.name // .url), .url, (.method // "GET"), (.timeout_ms // 10000), (.expected_status // ""), ((.keyword // "") | gsub("[\\n\\r]"; " ")), .interval_minutes] | map(tostring) | join("\u001f")' \
+    jq -r '.data.data[] | select(.enabled) | [.id, (.name // .url), .url, (.method // "GET"), (.timeout_ms // 10000), (.expected_status // ""), ((.keyword // "") | gsub("[\\n\\r]"; " ")), .interval_minutes, ((.updated_at // "") | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0)] | map(tostring) | join("\u001f")' \
       "$HTTP_BODY" > "$TMP/monitors.tsv"
     have=1
     if [ "$DRY" != 1 ]; then cp "$TMP/monitors.tsv" "$list"; fi
@@ -230,7 +259,7 @@ cycle() {
   else
     local msg=""
     case "$HTTP_CODE" in
-      401|403) msg="token refused (HTTP $HTTP_CODE) when listing the monitors of probe $PROBE" ;;
+      401|403) msg="key refused (HTTP $HTTP_CODE) when listing the monitors of probe $PROBE: was it replaced or the probe deleted?" ;;
       000|5??)
         if [ "$DRY" != 1 ] && [ -f "$list" ]; then
           cp "$list" "$TMP/monitors.tsv"; have=1
@@ -243,10 +272,14 @@ cycle() {
     if [ "$LINK_KEY" != "$HTTP_CODE" ]; then warn "$msg"; LINK_KEY="$HTTP_CODE"; fi
   fi
   if [ "$have" = 1 ]; then
-    while IFS=$'\x1f' read -r id name url method tmo expected keyword interval; do
-      t=$(date +%s); last=0
+    while IFS=$'\x1f' read -r id name url method tmo expected keyword interval upd; do
+      t=$(date +%s); last=0; seen=""
       [ -f "$LAST/$id" ] && last=$(cat "$LAST/$id")
-      [ $((t - last)) -ge $((interval * 60)) ] || continue
+      [ -f "$UPD/$id" ] && seen=$(cat "$UPD/$id")
+      # Due when its interval has passed, or when its settings were edited since this probe last checked it (so a change on the
+      # monitor's screen shows its effect within one pass, not after up to an hour). The edit time is compared for DIFFERENCE with the
+      # one seen at the last check, never with this machine's clock, so a clock that disagrees with Evolution's cannot make it loop.
+      if [ $((t - last)) -lt $((interval * 60)) ] && { [ "${upd:-0}" = 0 ] || [ "$seen" = "$upd" ]; }; then continue; fi
       out=$(check_monitor "$url" "$method" "$tmo" "$expected" "$keyword")
       say "$(printf '%s' "$out" | jq -r 'if .ok then "ok  " else "DOWN" end + "  \(.response_ms) ms  \(.status_code // "-")  \(.error // "")"') $name"
       [ "$DRY" = 1 ] && continue
@@ -255,6 +288,7 @@ cycle() {
         tail -n "$BUFFER_MAX" "$BUF/$id.jsonl" > "$BUF/$id.jsonl.new"; mv "$BUF/$id.jsonl.new" "$BUF/$id.jsonl"
       fi
       echo "$t" > "$LAST/$id"
+      echo "${upd:-0}" > "$UPD/$id"
     done < "$TMP/monitors.tsv"
   fi
   [ "$DRY" = 1 ] && return 0
@@ -264,25 +298,41 @@ cycle() {
   done
 }
 
+# NB_PROBER_LOG=FILE: write the output to FILE and keep it bounded (the macOS service uses it, as launchd does not rotate a log).
+# Before every pass a file over NB_PROBER_LOG_MAX_BYTES (default 5 MiB) is moved to FILE.1 (replacing the old one) and a new FILE starts,
+# so the two together stay near twice that.
+open_log() {
+  [ -n "${NB_PROBER_LOG-}" ] || return 0
+  local max="${NB_PROBER_LOG_MAX_BYTES:-5242880}" size
+  case "$max" in ''|*[!0-9]*) max=5242880 ;; esac
+  if [ -f "$NB_PROBER_LOG" ]; then
+    size=$(wc -c < "$NB_PROBER_LOG" | tr -d ' ')
+    if [ "${size:-0}" -gt "$max" ]; then mv -f "$NB_PROBER_LOG" "$NB_PROBER_LOG.1"; fi
+  fi
+  exec >> "$NB_PROBER_LOG" 2>&1
+}
+
 cmd_run() {
-  need curl; need jq; need_token; need_probe; make_tmp
-  BUF="$STATE_ROOT/$PROBE/buffer"; LAST="$STATE_ROOT/$PROBE/last"
-  if [ "$DRY" != 1 ]; then mkdir -p "$BUF" "$LAST"; fi
+  need curl; need jq; need_key; make_tmp
+  open_log
+  BUF="$STATE_ROOT/$PROBE/buffer"; LAST="$STATE_ROOT/$PROBE/last"; UPD="$STATE_ROOT/$PROBE/updated"
+  if [ "$DRY" != 1 ]; then mkdir -p "$BUF" "$LAST" "$UPD"; fi
   say "probe $PROBE: reporting to $API"
   trap 'say "stopped"; exit 0' INT TERM
   while :; do
     cycle
     [ "$ONCE" = 1 ] && break
+    open_log
     sleep "$TICK" & wait $!
   done
 }
 
 cmd_list() {
-  need curl; need jq; need_token; need_probe; make_tmp
-  http GET "$API/api/v1/monitors?mode=push&probe=$PROBE"
+  need curl; need jq; need_key; make_tmp
+  http GET "$API/api/v1/probe/monitors"
   case "$HTTP_CODE" in
     200) ;;
-    401|403) die "token refused (HTTP $HTTP_CODE)" ;;
+    401|403) die "key refused (HTTP $HTTP_CODE)" ;;
     *) die "cannot list the monitors (HTTP $HTTP_CODE)" ;;
   esac
   printf '%-38s %8s  %-6s %-8s %s\n' ID MINUTES METHOD STATE URL
@@ -311,21 +361,295 @@ cmd_doctor() {
   make_tmp
   if command -v curl >/dev/null; then ok "curl installed"; else flag "curl is not installed"; fi
   if command -v jq >/dev/null; then ok "jq installed ($(jq --version))"; else flag "jq is not installed (brew install jq)"; fi
-  if [ -n "$TOKEN" ]; then ok "token set"; else flag "no token: set NB_PROBER_TOKEN"; fi
-  if [ -z "$PROBE" ]; then flag "no probe name: give --probe NAME or set NB_PROBER_NAME"
-  elif printf '%s' "$PROBE" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$'; then ok "probe name: $PROBE"
-  else flag "invalid probe name: $PROBE"; fi
-  if command -v curl >/dev/null && [ -n "$TOKEN" ]; then
-    http GET "$API/api/v1/monitors?mode=push${PROBE:+&probe=$PROBE}"
+  if [ -z "$KEY" ]; then flag "no key: set NB_PROBER_KEY"
+  elif printf '%s' "$KEY" | grep -Eq '^nbp_[A-Za-z0-9]{1,64}_[A-Za-z0-9_-]{43}$'; then PROBE="${KEY#nbp_}"; PROBE="${PROBE%%_*}"; ok "key set (probe $PROBE)"
+  else flag "NB_PROBER_KEY is not a probe key (it looks like nbp_<id>_<secret>)"; fi
+  if { [ "$TICK" -ge 1 ] && [ "$TICK" -le 60 ]; } 2>/dev/null; then ok "pass every $TICK seconds"; else flag "NB_PROBER_TICK is 1 to 60 seconds"; fi
+  if command -v curl >/dev/null && [ -n "$PROBE" ]; then
+    http GET "$API/api/v1/probe/monitors"
     case "$HTTP_CODE" in
-      200) ok "Evolution reachable at $API, token accepted" ;;
-      401|403) flag "Evolution at $API refused the token (HTTP $HTTP_CODE)" ;;
+      200) ok "Evolution reachable at $API, key accepted" ;;
+      401|403) flag "Evolution at $API refused the key (HTTP $HTTP_CODE): was it replaced, or the probe deleted?" ;;
       000) flag "cannot reach Evolution at $API" ;;
       *) flag "Evolution at $API answered HTTP $HTTP_CODE" ;;
     esac
   fi
   if mkdir -p "$STATE_ROOT" 2>/dev/null && [ -w "$STATE_ROOT" ]; then ok "state directory writable: $STATE_ROOT"; else flag "state directory not writable: $STATE_ROOT"; fi
   [ "$bad" -eq 0 ]
+}
+
+# ---- service: run as a service (Ubuntu: systemd, macOS: launchd) ------------------------------------
+SVC_NAME="nb-prober"
+SVC_BIN="/usr/local/bin/nb-prober"
+SVC_LABEL="com.nasebanal.nb-prober"
+
+# Which platform, and the paths of that platform.
+svc_platform() {
+  if [ -z "$SVC_OS" ]; then
+    case "$(uname -s)" in
+      Linux)  SVC_OS=ubuntu ;;
+      Darwin) SVC_OS=macos ;;
+      *) die "service install supports Ubuntu (Linux with systemd) and macOS; see the README for other systems" ;;
+    esac
+  fi
+  case "$SVC_OS" in
+    ubuntu)
+      SVC_ENV_DIR="/etc/nb-prober"; SVC_ENV="$SVC_ENV_DIR/env"
+      SVC_UNIT="/etc/systemd/system/$SVC_NAME.service"; SVC_STATE="/var/lib/nb-prober" ;;
+    macos)
+      SVC_PLIST="/Library/LaunchDaemons/$SVC_LABEL.plist"; SVC_STATE="/var/db/nb-prober"; SVC_LOG="/var/log/nb-prober.log"; SVC_ERR="/var/log/nb-prober.err" ;;
+    *) die "--os is ubuntu or macos" ;;
+  esac
+}
+
+svc_unit() {
+  cat <<UNIT
+[Unit]
+Description=NASEBANAL Prober
+Documentation=https://github.com/nasebanal/nb-prober
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$SVC_BIN run
+EnvironmentFile=$SVC_ENV
+Environment=NB_PROBER_STATE_DIR=$SVC_STATE
+StateDirectory=$SVC_NAME
+DynamicUser=yes
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+# XML text for a plist value.
+svc_xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# The launchd daemon: starts at load and at boot, kept alive, run as `nobody` (the plist is readable by root only: it holds the key).
+svc_plist() {
+  local k="$1" base=""
+  [ "$URL_GIVEN" = 0 ] || base="    <key>NB_ASSURANCE_BASE_URL</key><string>$(svc_xml "$API")</string>"
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$SVC_LABEL</string>
+  <key>ProgramArguments</key>
+  <array><string>$SVC_BIN</string><string>run</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NB_PROBER_KEY</key><string>$(svc_xml "$k")</string>
+    <key>NB_PROBER_STATE_DIR</key><string>$SVC_STATE</string>
+    <key>NB_PROBER_LOG</key><string>$SVC_LOG</string>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+$base
+  </dict>
+  <key>UserName</key><string>nobody</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>$SVC_ERR</string>
+  <key>StandardErrorPath</key><string>$SVC_ERR</string>
+</dict>
+</plist>
+PLIST
+}
+
+# macOS: (re)load the daemon. `bootout` returns before the job is gone, and a `bootstrap` straight after it fails with
+# "Bootstrap failed: 5: Input/output error", so wait until launchd no longer knows the job, and try the load twice.
+svc_mac_load() {
+  local i
+  launchctl bootout "system/$SVC_LABEL" >/dev/null 2>&1 || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl print "system/$SVC_LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  launchctl bootstrap system "$SVC_PLIST" 2>/dev/null && return 0
+  sleep 1
+  launchctl bootstrap system "$SVC_PLIST"
+}
+
+svc_need_root() {
+  [ -n "$ROOT" ] && return 0
+  [ "$(id -u)" -eq 0 ] || die "run it with sudo: it installs a system service"
+  if [ "$SVC_OS" = ubuntu ]; then
+    [ -d /run/systemd/system ] || die "systemd was not found on this machine: see the README for cron or nohup instead"
+  else
+    command -v launchctl >/dev/null || die "launchctl was not found: is this a Mac?"
+  fi
+}
+
+# service install: the probe's key comes from NB_PROBER_KEY or from stdin, is checked against Evolution, and then the
+# script and the service are put in place and started.
+cmd_service_install() {
+  need curl; need jq
+  svc_platform
+  if [ -z "$KEY" ] && [ ! -t 0 ]; then IFS= read -r KEY || true; fi
+  [ -n "$KEY" ] || die "no key: give it as the argument (sudo nb-prober service install nbp_...), pipe it in, or set NB_PROBER_KEY"
+  need_key
+  make_tmp
+  if [ "$DRY" = 1 ]; then
+    echo "Would install on $SVC_OS (nothing is written):"
+    echo "  the script  -> $SVC_BIN"
+    if [ "$SVC_OS" = ubuntu ]; then
+      echo "  the key     -> $SVC_ENV (mode 600, for probe $PROBE)"
+      echo "  the unit    -> $SVC_UNIT:"
+      svc_unit | sed 's/^/      /'
+      echo "  then: systemctl daemon-reload; systemctl enable $SVC_NAME; systemctl restart $SVC_NAME"
+    else
+      echo "  the daemon  -> $SVC_PLIST (mode 600, holds the key of probe $PROBE):"
+      svc_plist "nbp_${PROBE}_<the key's secret>" | sed 's/^/      /'
+      echo "  then: launchctl bootstrap system $SVC_PLIST; launchctl kickstart -k system/$SVC_LABEL"
+    fi
+    return 0
+  fi
+  svc_need_root
+  http GET "$API/api/v1/probe/monitors"
+  case "$HTTP_CODE" in
+    200) ;;
+    401|403) die "Evolution at $API refused this key (HTTP $HTTP_CODE): nothing was installed. Was it replaced, or the probe deleted?" ;;
+    *) warn "cannot reach Evolution at $API now (HTTP $HTTP_CODE): installing anyway; the service keeps trying" ;;
+  esac
+  local self; self=$(real_path "$SELF")
+  mkdir -p "$ROOT$(dirname "$SVC_BIN")"
+  if [ "$self" != "$ROOT$SVC_BIN" ]; then install -m 755 "$self" "$ROOT$SVC_BIN"; fi
+  if [ "$SVC_OS" = ubuntu ]; then
+    mkdir -p "$ROOT$SVC_ENV_DIR" "$ROOT$(dirname "$SVC_UNIT")"
+    chmod 700 "$ROOT$SVC_ENV_DIR"
+    # The key file is made private BEFORE the key is written to it.
+    ( umask 077; : > "$ROOT$SVC_ENV"; chmod 600 "$ROOT$SVC_ENV"
+      printf 'NB_PROBER_KEY=%s\n' "$KEY" > "$ROOT$SVC_ENV"
+      [ "$URL_GIVEN" = 0 ] || printf 'NB_ASSURANCE_BASE_URL=%s\n' "$API" >> "$ROOT$SVC_ENV" )
+    svc_unit > "$ROOT$SVC_UNIT"
+  else
+    mkdir -p "$ROOT$(dirname "$SVC_PLIST")" "$ROOT$SVC_STATE" "$ROOT$(dirname "$SVC_LOG")"
+    ( umask 077; : > "$ROOT$SVC_PLIST"; chmod 600 "$ROOT$SVC_PLIST"; svc_plist "$KEY" > "$ROOT$SVC_PLIST" )
+    if [ -z "$ROOT" ]; then
+      chown root:wheel "$SVC_PLIST"
+      chown nobody "$SVC_STATE"; chmod 700 "$SVC_STATE"
+      : >> "$SVC_LOG"; chown nobody "$SVC_LOG"; chmod 640 "$SVC_LOG"
+      : >> "$SVC_ERR"; chown nobody "$SVC_ERR"; chmod 640 "$SVC_ERR"
+    fi
+  fi
+  if [ -n "$ROOT" ]; then echo "Files written under $ROOT (the service manager is not touched)."; return 0; fi
+  if [ "$SVC_OS" = ubuntu ]; then
+    systemctl daemon-reload
+    systemctl enable "$SVC_NAME" >/dev/null 2>&1
+    systemctl restart "$SVC_NAME"
+    sleep 2
+    if systemctl is-active --quiet "$SVC_NAME"; then up=1; else up=0; fi
+    logs="sudo nb-prober service logs -f"
+  else
+    svc_mac_load
+    launchctl enable "system/$SVC_LABEL" >/dev/null 2>&1 || true
+    launchctl kickstart -k "system/$SVC_LABEL" >/dev/null 2>&1 || true
+    sleep 2
+    if launchctl print "system/$SVC_LABEL" 2>/dev/null | grep -q "state = running"; then up=1; else up=0; fi
+    logs="sudo nb-prober service logs -f"
+  fi
+  if [ "${up:-0}" = 1 ]; then
+    echo "nb-prober is running as a service (probe $PROBE). It starts at boot and restarts itself."
+  else
+    warn "the service did not stay up: see the log ($logs)"
+    return 1
+  fi
+  echo "  status:  sudo nb-prober service status      logs:  $logs"
+  echo "  Evolution shows the probe online within a minute."
+}
+
+cmd_service_uninstall() {
+  svc_platform
+  svc_need_root
+  if [ "$SVC_OS" = ubuntu ]; then
+    [ -n "$ROOT" ] || systemctl disable --now "$SVC_NAME" >/dev/null 2>&1 || true
+    rm -f "$ROOT$SVC_UNIT" "$ROOT$SVC_ENV"
+    rmdir "$ROOT$SVC_ENV_DIR" 2>/dev/null || true
+    [ -n "$ROOT" ] || systemctl daemon-reload
+  else
+    [ -n "$ROOT" ] || launchctl bootout "system/$SVC_LABEL" >/dev/null 2>&1 || true
+    rm -f "$ROOT$SVC_PLIST"
+  fi
+  echo "The service and its key are removed. The state directory $SVC_STATE is kept (results not yet sent): delete it by hand if you do not need it. The script stays at $SVC_BIN."
+}
+
+cmd_service_status() {
+  svc_platform
+  [ -z "$ROOT" ] || die "status needs the real system (no --root)"
+  if [ "$SVC_OS" = ubuntu ]; then
+    [ -d /run/systemd/system ] || die "systemd was not found on this machine"
+    systemctl status "$SVC_NAME" --no-pager || true
+    echo
+    journalctl -u "$SVC_NAME" -n 15 --no-pager 2>/dev/null || true
+    echo; echo "Log: sudo nb-prober service logs [-f]   (journalctl -u $SVC_NAME)"
+  else
+    launchctl print "system/$SVC_LABEL" 2>/dev/null | sed -n '1,12p' || true
+    echo
+    tail -n 15 "$SVC_LOG" 2>/dev/null || true
+    echo; echo "Log: sudo nb-prober service logs [-f]   ($SVC_LOG)"
+  fi
+}
+
+# service logs [-f] [-n N]: the service's log, wherever the platform keeps it.
+cmd_service_logs() {
+  svc_platform
+  [ -z "$ROOT" ] || die "logs needs the real system (no --root)"
+  case "$LOG_LINES" in ''|*[!0-9]*) die "-n takes a number of lines" ;; esac
+  if [ "$SVC_OS" = ubuntu ]; then
+    command -v journalctl >/dev/null || die "journalctl was not found on this machine"
+    if [ "$FOLLOW" = 1 ]; then exec journalctl -u "$SVC_NAME" -n "$LOG_LINES" -f; fi
+    exec journalctl -u "$SVC_NAME" -n "$LOG_LINES" --no-pager
+  else
+    [ -f "$SVC_LOG" ] || die "no log yet at $SVC_LOG: is the service installed? (sudo nb-prober service install KEY)"
+    [ -r "$SVC_LOG" ] || die "cannot read $SVC_LOG: run it with sudo"
+    if [ "$FOLLOW" = 1 ]; then exec tail -n "$LOG_LINES" -f "$SVC_LOG"; fi
+    exec tail -n "$LOG_LINES" "$SVC_LOG"
+  fi
+}
+
+# service start|stop|restart: use the key already stored, so none is given. `stop` lasts until the next boot (the service
+# is still registered and starts again then); `uninstall` is what removes it.
+cmd_service_control() {
+  local verb="$1"
+  svc_platform
+  svc_need_root
+  if [ "$SVC_OS" = ubuntu ]; then
+    if [ -n "$ROOT" ]; then [ -f "$ROOT$SVC_UNIT" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"; echo "(--root: $verb not run)"; return 0; fi
+    [ -f "$SVC_UNIT" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"
+    systemctl "$verb" "$SVC_NAME"
+  else
+    if [ -n "$ROOT" ]; then [ -f "$ROOT$SVC_PLIST" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"; echo "(--root: $verb not run)"; return 0; fi
+    [ -f "$SVC_PLIST" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"
+    case "$verb" in
+      stop)    launchctl bootout "system/$SVC_LABEL" >/dev/null 2>&1 || true ;;
+      start)   if launchctl print "system/$SVC_LABEL" >/dev/null 2>&1; then launchctl kickstart "system/$SVC_LABEL"; else svc_mac_load; fi ;;
+      restart) svc_mac_load ;;
+    esac
+  fi
+  case "$verb" in
+    stop) echo "Stopped until the next boot. 'sudo nb-prober service start' starts it now; 'service uninstall' removes it." ;;
+    *) echo "Done ($verb). 'sudo nb-prober service status' shows it." ;;
+  esac
+}
+
+cmd_service() {
+  [ "${#POS[@]}" -ge 1 ] || usage
+  # `service install [KEY]`: the key may also be given as the argument (like `cloudflared service install <token>`)
+  if [ "${POS[0]}" = install ] && [ "${#POS[@]}" -eq 2 ]; then KEY="${POS[1]}"; elif [ "${#POS[@]}" -ne 1 ]; then usage; fi
+  case "${POS[0]}" in
+    install)   cmd_service_install ;;
+    uninstall) cmd_service_uninstall ;;
+    status)    cmd_service_status ;;
+    logs)      cmd_service_logs ;;
+    start|stop|restart) cmd_service_control "${POS[0]}" ;;
+    *) usage ;;
+  esac
 }
 
 real_path() {
@@ -368,8 +692,6 @@ cmd="$1"; shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help)   help; exit 0 ;;
-    --probe)     [ "$#" -ge 2 ] || usage; PROBE="$2"; shift 2 ;;
-    --probe=*)   PROBE="${1#*=}"; shift ;;
     --method)    [ "$#" -ge 2 ] || usage; METHOD="$2"; shift 2 ;;
     --method=*)  METHOD="${1#*=}"; shift ;;
     --expect-status) [ "$#" -ge 2 ] || usage; EXPECT="$2"; shift 2 ;;
@@ -380,6 +702,14 @@ while [ "$#" -gt 0 ]; do
     --timeout-ms=*) TIMEOUT_MS="${1#*=}"; shift ;;
     --once)      ONCE=1; shift ;;
     --dry-run)   DRY=1; shift ;;
+    --root)      [ "$#" -ge 2 ] || usage; ROOT="${2%/}"; shift 2 ;;
+    --root=*)    ROOT="${1#*=}"; ROOT="${ROOT%/}"; shift ;;
+    -f|--follow) FOLLOW=1; shift ;;
+    -n)          [ "$#" -ge 2 ] || usage; LOG_LINES="$2"; shift 2 ;;
+    --url)       [ "$#" -ge 2 ] || usage; API="$2"; URL_GIVEN=1; shift 2 ;;
+    --url=*)     API="${1#*=}"; URL_GIVEN=1; shift ;;
+    --os)        [ "$#" -ge 2 ] || usage; SVC_OS="$2"; shift 2 ;;
+    --os=*)      SVC_OS="${1#*=}"; shift ;;
     --)          shift; POS+=("$@"); break ;;
     -*)          usage ;;
     *)           POS+=("$1"); shift ;;
@@ -391,5 +721,6 @@ case "$cmd" in
   list)   [ "${#POS[@]}" -eq 0 ] || usage; cmd_list ;;
   check)  cmd_check ;;
   doctor) [ "${#POS[@]}" -eq 0 ] || usage; cmd_doctor ;;
+  service) cmd_service ;;
   *)      usage ;;
 esac
