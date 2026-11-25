@@ -108,7 +108,7 @@ shasum -a 256 -c nb-prober.sha256
 sudo mkdir -p /usr/local/bin && sudo install -m 755 nb-prober /usr/local/bin/nb-prober
 ```
 
-To pin a version, replace `latest/download` with `download/v0.1.0` (any release tag). Check it with `nb-prober --version` (a copy cloned from `main` says `dev`; a release says its version), and update by running the same commands again.
+To pin a version, replace `latest/download` with `download/v0.2.0` (any release tag). Check it with `nb-prober --version` (a copy cloned from `main` says `dev`; a release says its version), and update by running the same commands again.
 
 ## 🧰 Running it as a service
 
@@ -159,6 +159,9 @@ Every command answers `-h`.
 | `check <url> [--method GET\|HEAD] [--expect-status CODE] [--keyword TEXT] [--timeout-ms MS]` | One check of a URL from this machine, printed as JSON, to try it before registering a monitor. Reports nothing, and needs no key. Exits 0 if the target is ok, 1 if not |
 | `doctor` | Check `curl` and `jq`, the key and which probe it is, Evolution and the key's acceptance, and the state directory, without reporting anything. Exits 1 if anything is flagged |
 | `--install [DIR]` | Link this script into `DIR` (default `~/.local/bin`) so `nb-prober` is on your PATH. A symlink, so `git pull` updates it; it never replaces a file or link it did not make, and prints the line to add to your shell if `DIR` is not on your PATH |
+| `--uninstall [DIR]` | Remove the link `--install` made (only a link to this script, never a file or another program's link). The service is separate: `service delete` |
+| `service create [KEY] \| start \| stop \| restart \| status \| logs \| delete` | Run it as a service that starts at boot and restarts itself (Ubuntu: systemd, macOS: launchd); see [Running it as a service](#-running-it-as-a-service). Options: `--dry-run`, `--force`, `--os ubuntu\|macos`, `--root DIR`, `--url URL`, and `-f` / `-n N` for `logs` |
+| `--complete [WORD...]` | Print the tab-completion candidates for `nb prober <TAB>`, one per line (the last `WORD` is the one being typed). Used by `nb completion`; it reads nothing from Evolution and runs nothing |
 
 ## 🔎 How a check is judged
 
