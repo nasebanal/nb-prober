@@ -94,6 +94,27 @@ check "--install refuses to replace a file it did not make" rc_is 1
 check "--install explains the refusal" has "already exists"
 run_nbp --install "$inst" "$work/other"
 check "--install with two directories shows the usage" rc_is 1
+echo "uninstall (the link made by --install)"
+rm -f "$inst/nb-prober"
+run_nbp --install "$inst"
+run_nbp --uninstall "$inst"
+check "--uninstall removes the link --install made" test ! -e "$inst/nb-prober" -a ! -L "$inst/nb-prober"
+check "--uninstall says what it removed" has "Removed"
+run_nbp --uninstall "$inst"
+check "--uninstall with nothing there says so and is not an error" has "Nothing to remove"
+check "and exits 0" rc_is 0
+echo foreign > "$inst/nb-prober"
+run_nbp --uninstall "$inst"
+check "--uninstall never removes a file it did not link" rc_is 1
+check "and the file is still there" test -f "$inst/nb-prober"
+rm "$inst/nb-prober"; ln -s /bin/ls "$inst/nb-prober"
+run_nbp --uninstall "$inst"
+check "--uninstall never removes another program's link" test -L "$inst/nb-prober"
+rm "$inst/nb-prober"
+run_nbp --uninstall "$inst" "$work/other"
+check "--uninstall with two directories shows the usage" rc_is 1
+run_nbp -h
+check "-h lists --uninstall" has "--uninstall [DIR]"
 
 echo "check"
 reset_shim
@@ -260,9 +281,15 @@ reset_shim
 monitors "[]"
 # shellcheck disable=SC2012  # the mode string of one known path; `stat` differs between macOS and Linux
 perm() { ls -ld "$1" | cut -c1-10; }
-run_nbp service create --os ubuntu --dry-run
+run_nbp service create --os ubuntu --dry-run --root "$work/dry"
 check "service create --os ubuntu --dry-run shows the unit and writes nothing" has "Restart=always"
 check "the dry run names the key file and the script" has "/etc/nb-prober/env"
+out=$(env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --dry-run --root "$work/dry" 2>&1); rc=$?
+check "the dry run says which Evolution it would report to (the default is production)" has "reports to  -> https://api.assurance.nasebanal.com (production, the default)"
+out=$(env -u NB_PROBER_KEY NB_ASSURANCE_BASE_URL=http://localhost:8791 "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --dry-run --root "$work/dry" 2>&1); rc=$?
+check "an address from the environment is named as such" has "reports to  -> http://localhost:8791 (from the environment variable NB_ASSURANCE_BASE_URL)"
+out=$(env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service create "$NB_PROBER_KEY" --url http://localhost:8791 --os ubuntu --dry-run --root "$work/dry" 2>&1); rc=$?
+check "an address from --url is named as such" has "(from --url)"
 check "the dry run never prints the key's secret" hasnt "AAAAAAAAAAAAAAAA"
 check "the unit starts at boot, locked down, with the state in its own directory" has "StateDirectory=nb-prober"
 ROOT_DIR="$work/root"; rm -rf "$ROOT_DIR"
@@ -394,13 +421,13 @@ out=$(env -u NB_PROBER_KEY "$NBP" service uninstall --os ubuntu --root "$ALIAS_R
 check "service uninstall still deletes it" test ! -e "$ALIAS_ROOT/etc/systemd/system/nb-prober.service"
 run_nbp -h
 check "the usage shows create and delete, not install and uninstall" hasnt "service install"
-check "and does not mention uninstall" hasnt "uninstall"
+check "and does not mention service uninstall (--uninstall is the PATH link)" hasnt "service uninstall"
 if [ "$(id -u)" -ne 0 ]; then
   reset_shim
   out=$(env -u NB_PROBER_KEY "$NBP" service install "$NB_PROBER_KEY" --os ubuntu 2>&1); rc=$?
   check "the old name also goes through sudo (as typed, mapped again in the root run)" grep -q "service install" "$SHIM_DIR/sudo.log"
 fi
-run_nbp service create --os macos --dry-run
+run_nbp service create --os macos --dry-run --root "$work/dry"
 check "macOS dry run shows the daemon file" has "com.nasebanal.nb-prober.plist"
 check "macOS dry run never prints the key's secret" hasnt "AAAAAAAAAAAAAAAA"
 out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os macos --root "$MAC_ROOT" 2>&1); rc=$?

@@ -11,6 +11,7 @@
 #   doctor                               check the setup (tools, key, Evolution, state directory)
 #   service create [KEY]|start|stop|restart|status|logs|delete  run it as a service that starts at boot and restarts itself (Ubuntu: systemd, macOS: launchd)
 #   --install [DIR]                      link this script into DIR (default ~/.local/bin)
+#   --uninstall [DIR]                    remove that link (only a link to this script; the service is separate: service delete)
 #
 # Options:
 #   --once                               run: one pass, then exit (for cron or a test)
@@ -70,6 +71,9 @@
 # --install  put `nb-prober` on your PATH: a symlink to this script in DIR (default ~/.local/bin,
 #          created if missing), so a `git pull` of this repository updates it. It does not replace
 #          anything it did not make, and prints the line to add if DIR is not on your PATH.
+# --uninstall  remove that link from DIR (default ~/.local/bin). It removes only a link that points to this script, never a file or
+#          another program's link, and says so when there is nothing to remove. A service made by `service create` is a different thing:
+#          `nb-prober service delete` removes it.
 #
 # How a response is judged (the same as Evolution's checker):
 #   - redirects are followed (up to 20); only http and https are requested
@@ -126,7 +130,9 @@ now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say() { printf '%s %s\n' "$(now)" "$*"; }
 
 API="${NB_ASSURANCE_BASE_URL:-https://api.assurance.nasebanal.com}"
-URL_GIVEN=0; [ -z "${NB_ASSURANCE_BASE_URL-}" ] || URL_GIVEN=1   # not the default: written into the service
+DEFAULT_API="https://api.assurance.nasebanal.com"
+URL_GIVEN=0; URL_FROM=""
+[ -z "${NB_ASSURANCE_BASE_URL-}" ] || { URL_GIVEN=1; URL_FROM="the environment variable NB_ASSURANCE_BASE_URL"; }   # not the default: written into the service
 KEY="${NB_PROBER_KEY:-}"
 # The key is nbp_<probe id>_<secret>: the id names the probe (and its state directory) without asking Evolution.
 PROBE=""
@@ -495,7 +501,7 @@ svc_elevate() {
   if [ "${POS[0]}" = create ] && [ "${#POS[@]}" -eq 1 ] && [ -n "$KEY" ]; then args+=("$KEY"); fi
   [ "$URL_GIVEN" = 0 ] || args+=(--url "$API")
   echo "nb-prober: this needs administrator rights; running it with sudo" >&2
-  exec sudo env NB_PROBER_ELEVATED=1 "$self" "${args[@]}"
+  exec sudo env NB_PROBER_ELEVATED=1 ${URL_FROM:+"NB_PROBER_URL_FROM=$URL_FROM"} "$self" "${args[@]}"
 }
 
 svc_need_root() {
@@ -512,6 +518,14 @@ svc_need_root() {
 # script and the service are put in place and started.
 # One service per machine, and `create` never takes one over: another key would silently stop the probe that runs now and leave its
 # monitors with "no report". An existing service is an error that says how to replace it (delete, then create), or --force to do it in one step.
+# Which Evolution the service reports to, and where that address came from: a wrong one (a variable left in the shell) is otherwise silent.
+svc_target() {
+  if [ "$URL_GIVEN" = 0 ]; then echo "$API (production, the default)"; else echo "$API (from $URL_FROM)"; fi
+}
+svc_target_warn() {
+  [ "$API" = "$DEFAULT_API" ] || warn "this is not the production Evolution ($DEFAULT_API): is that what you want? If not, remove ${URL_FROM:-the address} and create the service again (--force)"
+}
+
 svc_refuse_if_exists() {
   local path had=""
   if [ "$SVC_OS" = macos ]; then path="$ROOT$SVC_PLIST"; else path="$ROOT$SVC_UNIT"; fi
@@ -541,6 +555,7 @@ cmd_service_create() {
   if [ "$DRY" = 1 ]; then
     echo "Would create the service on $SVC_OS (nothing is written):"
     echo "  the script  -> $SVC_BIN"
+    echo "  reports to  -> $(svc_target)"
     if [ "$SVC_OS" = ubuntu ]; then
       echo "  the key     -> $SVC_ENV (mode 600, for probe $PROBE)"
       echo "  the unit    -> $SVC_UNIT:"
@@ -603,6 +618,8 @@ cmd_service_create() {
     warn "the service did not stay up: see the log ($logs)"
     return 1
   fi
+  echo "  reports to: $(svc_target)"
+  svc_target_warn
   echo "  status:  nb-prober service status      logs:  $logs"
   echo "  Evolution shows the probe online within a minute."
 }
@@ -625,6 +642,12 @@ cmd_service_delete() {
 cmd_service_status() {
   svc_platform
   [ -z "$ROOT" ] || die "status needs the real system (no --root)"
+  # The address the service reports to is the one stored in it (the key file / the plist), or the production default.
+  local conf=""
+  if [ "$SVC_OS" = ubuntu ]; then conf=$(sed -n 's/^NB_ASSURANCE_BASE_URL=//p' "$SVC_ENV" 2>/dev/null | head -n1 || true)
+  else conf=$(sed -n 's|.*<key>NB_ASSURANCE_BASE_URL</key><string>\(.*\)</string>.*|\1|p' "$SVC_PLIST" 2>/dev/null | head -n1 || true); fi
+  if [ -n "$conf" ]; then echo "Reports to: $conf"; else echo "Reports to: $DEFAULT_API (production, the default)"; fi
+  echo
   if [ "$SVC_OS" = ubuntu ]; then
     [ -d /run/systemd/system ] || die "systemd was not found on this machine"
     systemctl status "$SVC_NAME" --no-pager || true
@@ -728,10 +751,30 @@ cmd_install() {
   esac
 }
 
+cmd_uninstall() {
+  [ "$#" -le 1 ] || usage
+  local target="${1:-$HOME/.local/bin}" me link
+  me=$(real_path "$SELF")
+  link="$target/nb-prober"
+  if [ -L "$link" ] && [ "$(real_path "$link")" = "$me" ]; then
+    rm "$link"
+    echo "Removed $link"
+  elif [ -e "$link" ] || [ -L "$link" ]; then
+    die "$link is not a link to this script: not removed"
+  else
+    echo "Nothing to remove: $link does not exist"
+  fi
+  # the service is separate: say so when there is one
+  if [ -e /etc/systemd/system/nb-prober.service ] || [ -e /Library/LaunchDaemons/com.nasebanal.nb-prober.plist ]; then
+    echo "A service made by 'service create' is still there: 'nb-prober service delete' removes it."
+  fi
+}
+
 case "${1:-}" in
   -h|--help|help) help; exit 0 ;;
   --version|version) echo "nb-prober $VERSION"; exit 0 ;;
   --install) shift; cmd_install "$@"; exit 0 ;;
+  --uninstall) shift; cmd_uninstall "$@"; exit 0 ;;
   "") usage ;;
 esac
 umask 077
@@ -755,8 +798,8 @@ while [ "$#" -gt 0 ]; do
     --force)     FORCE=1; shift ;;
     -f|--follow) FOLLOW=1; shift ;;
     -n)          [ "$#" -ge 2 ] || usage; LOG_LINES="$2"; shift 2 ;;
-    --url)       [ "$#" -ge 2 ] || usage; API="$2"; URL_GIVEN=1; shift 2 ;;
-    --url=*)     API="${1#*=}"; URL_GIVEN=1; shift ;;
+    --url)       [ "$#" -ge 2 ] || usage; API="$2"; URL_GIVEN=1; URL_FROM="--url"; shift 2 ;;
+    --url=*)     API="${1#*=}"; URL_GIVEN=1; URL_FROM="--url"; shift ;;
     --os)        [ "$#" -ge 2 ] || usage; SVC_OS="$2"; shift 2 ;;
     --os=*)      SVC_OS="${1#*=}"; shift ;;
     --)          shift; POS+=("$@"); break ;;
@@ -765,6 +808,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 API="${API%/}"
+# After a sudo re-run the address arrives as --url: say where it really came from.
+[ -z "${NB_PROBER_URL_FROM-}" ] || [ "$URL_FROM" != "--url" ] || URL_FROM="$NB_PROBER_URL_FROM"
 case "$cmd" in
   run)    [ "${#POS[@]}" -eq 0 ] || usage; cmd_run ;;
   list)   [ "${#POS[@]}" -eq 0 ] || usage; cmd_list ;;
