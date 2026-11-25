@@ -43,7 +43,9 @@ case "$url" in
     f="$SHIM_DIR/target/$(printf '%s' "$url" | tr -c 'A-Za-z0-9' _)"
     [ -f "$f" ] || { code "000 0.000000 0.000000"; exit 7; }
     status=$(sed -n 's/^status=//p' "$f"); t=$(sed -n 's/^time=//p' "$f"); rc=$(sed -n 's/^exit=//p' "$f")
-    [ -n "$out" ] && { [ "$method" = HEAD ] && : > "$out" || sed -n 's/^body=//p' "$f" > "$out"; }
+    if [ -n "$out" ]; then
+      if [ "$method" = HEAD ]; then : > "$out"; else sed -n 's/^body=//p' "$f" > "$out"; fi
+    fi
     code "${status:-000} ${t:-0.001} ${t:-0.001}"
     exit "${rc:-0}" ;;
 esac

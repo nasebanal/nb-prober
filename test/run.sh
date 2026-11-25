@@ -152,8 +152,8 @@ check "run: the disabled monitor is not checked" hasnt "Off"
 check "run: asked for mode=push and the probe" test "$(count_req 'mode=push&probe=office')" -ge 1
 check "run: reported to the monitor's own path" test "$(count_req 'POST http://evolution.test/api/v1/monitors/m1/results')" -eq 1
 check "run: the monitor's own method is used (HEAD for Wiki)" test "$(count_req 'HEAD http://wiki.test/')" -eq 1
-check "run: the monitor's expected status is used (204 is ok)" bash -c 'grep -l "\"response_ms\":100" "$1"/posts/*.json | xargs jq -e ".results[0].ok == true and .results[0].status_code == 204" >/dev/null' _ "$SHIM_DIR"
-check "run: the monitor's keyword is used" bash -c 'grep -l "\"response_ms\":20" "$1"/posts/*.json | xargs jq -e ".results[0].ok == true" >/dev/null' _ "$SHIM_DIR"
+check "run: the monitor's expected status is used (204 is ok)" jq -e -s 'map(.results[0]) | any(.response_ms == 100 and .ok == true and .status_code == 204)' "$SHIM_DIR"/posts/*.json >/dev/null
+check "run: the monitor's keyword is used" jq -e -s 'map(.results[0]) | any(.response_ms == 20 and .ok == true)' "$SHIM_DIR"/posts/*.json >/dev/null
 check "run: the report has the contract's fields" jq -e '.results[0] | has("checked_at") and .ok == true and .response_ms == 50 and .status_code == 200 and .error == null' "$SHIM_DIR/posts/1.json" >/dev/null
 check "run: checked_at is UTC ISO 8601" bash -c 'jq -r ".results[0].checked_at" "$1" | grep -Eq "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"' _ "$SHIM_DIR/posts/1.json"
 check "run: the buffer is empty after a successful report" test ! -s "$NB_PROBER_STATE_DIR/office/buffer/m1.jsonl"
