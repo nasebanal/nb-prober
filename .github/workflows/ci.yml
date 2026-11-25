@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The required check (every apps/ repository has a job named `check` on every PR, no path filter).
+  # The suite runs against a test double of curl (test/shim/curl), so no network and no token are involved.
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      # macOS ships bash 3.2; the README recommends bash 4 or later (the script itself stays 3.2-safe).
+      - name: Use a current bash (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash jq
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Run test/run.sh
+        run: |
+          bash --version | head -1
+          jq --version
+          test/run.sh
+
+      - name: Every script answers -h
+        run: |
+          bin/nb-prober -h > /dev/null
+          test/run.sh -h > /dev/null
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # shellcheck is preinstalled on the ubuntu runners.
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck bin/nb-prober test/run.sh test/shim/curl
