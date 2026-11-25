@@ -80,7 +80,7 @@ nb-prober list
 nb-prober run
 ```
 
-With the [`nb` command](https://github.com/nasebanal/nb-cli) (0.15.0 or later) installed, every command above also runs as `nb prober ...` (`nb` runs `nb-<name>` from your PATH), and `nb -h` lists it. `nb-prober` itself needs neither `nb` nor Node.
+With the [`nb` command](https://github.com/nasebanal/nb-cli) (0.15.0 or later) installed, every command above also runs as `nb prober ...` (`nb` runs `nb-<name>` from your PATH), and `nb -h` lists it. `nb-prober` itself needs neither `nb` nor Node. Tab completion (`nb prober <TAB>`, `nb prober service <TAB>`) needs one line in `~/.zshrc`, after `compinit`: `source <(nb completion zsh)` (nb 1.1.0 or later; see [Tab completion](https://github.com/nasebanal/nb-cli#tab-completion)).
 
 On a VM do not leave it running in an SSH session: it stops when you log out. Run it as a service: see [Running it as a service](#-running-it-as-a-service).
 
