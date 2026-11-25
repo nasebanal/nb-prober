@@ -55,7 +55,7 @@ jobs:
   check:
     needs: [test, shellcheck]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Every job passed
         run: |
