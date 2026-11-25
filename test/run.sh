@@ -67,6 +67,11 @@ check "the usage says it also runs as nb prober" has "Also runs as: nb prober"
 out=$(NB_PLUGIN_NAME="nb prober" "$NBP" -h 2>&1); rc=$?
 check "run through nb, the name shown is nb prober" has "Usage: nb prober <command>"
 check "run through nb, the Also runs as line is dropped" hasnt "Also runs as"
+check "run through nb, a command in the text reads nb prober" has 'put `nb prober` on your PATH'
+check "run through nb, a file name keeps its name (/usr/local/bin/nb-prober)" has "/usr/local/bin/nb-prober"
+check "run through nb, a log path keeps its name (/var/log/nb-prober.log)" has "/var/log/nb-prober.log"
+check "run through nb, a path is never rewritten (no 'nb prober.log' or '/nb prober')" bash -c '! printf "%s" "$1" | grep -qE "nb prober\.|/nb prober"' _ "$out"
+check "run through nb, the text never tells to type sudo nb" hasnt "sudo nb"
 run_nbp --version
 check "--version" has "nb-prober "
 run_nbp bogus
@@ -255,30 +260,30 @@ reset_shim
 monitors "[]"
 # shellcheck disable=SC2012  # the mode string of one known path; `stat` differs between macOS and Linux
 perm() { ls -ld "$1" | cut -c1-10; }
-run_nbp service install --os ubuntu --dry-run
-check "service install --os ubuntu --dry-run shows the unit and writes nothing" has "Restart=always"
+run_nbp service create --os ubuntu --dry-run
+check "service create --os ubuntu --dry-run shows the unit and writes nothing" has "Restart=always"
 check "the dry run names the key file and the script" has "/etc/nb-prober/env"
 check "the dry run never prints the key's secret" hasnt "AAAAAAAAAAAAAAAA"
 check "the unit starts at boot, locked down, with the state in its own directory" has "StateDirectory=nb-prober"
 ROOT_DIR="$work/root"; rm -rf "$ROOT_DIR"
-out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
+out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
 check "the key can come from stdin (not an argument)" rc_is 0
 ARG_ROOT="$work/argroot"; rm -rf "$ARG_ROOT"
-out=$(env -u NB_PROBER_KEY "$NBP" service install "$NB_PROBER_KEY" --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
-check "the key can be the argument (service install KEY), like cloudflared" rc_is 0
+out=$(env -u NB_PROBER_KEY "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
+check "the key can be the argument (service create KEY), like cloudflared" rc_is 0
 check "and is kept in the root-only file" grep -qxF "NB_PROBER_KEY=$NB_PROBER_KEY" "$ARG_ROOT/etc/nb-prober/env"
-check "the argument form is accepted after the options too" bash -c 'env -u NB_PROBER_KEY "$1" service install --os ubuntu --root "$2" "$3" >/dev/null 2>&1' _ "$NBP" "$ARG_ROOT" "$NB_PROBER_KEY"
+check "the argument form is accepted after the options too" bash -c 'env -u NB_PROBER_KEY "$1" service create --os ubuntu --root "$2" "$3" >/dev/null 2>&1' _ "$NBP" "$ARG_ROOT" "$NB_PROBER_KEY"
 URL_ROOT="$work/urlroot"; rm -rf "$URL_ROOT"
-out=$(env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service install "$NB_PROBER_KEY" --url http://evolution.test --os ubuntu --root "$URL_ROOT" 2>&1); rc=$?
+out=$(env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service create "$NB_PROBER_KEY" --url http://evolution.test --os ubuntu --root "$URL_ROOT" 2>&1); rc=$?
 check "--url is the Evolution address the key is checked against (sudo does not pass NB_ASSURANCE_BASE_URL on)" rc_is 0
 check "and is kept for the service" grep -qxF "NB_ASSURANCE_BASE_URL=http://evolution.test" "$URL_ROOT/etc/nb-prober/env"
-check "--url wins over the environment" bash -c 'NB_ASSURANCE_BASE_URL=http://other.test env -u NB_PROBER_KEY "$1" service install "$2" --url=http://evolution.test --os ubuntu --root "$3" 2>&1 | grep -q "other.test" && exit 1 || exit 0' _ "$NBP" "$NB_PROBER_KEY" "$URL_ROOT"
-rm -rf "$URL_ROOT"; env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service install "$NB_PROBER_KEY" --os ubuntu --root "$URL_ROOT" >/dev/null 2>&1 || true
+check "--url wins over the environment" bash -c 'NB_ASSURANCE_BASE_URL=http://other.test env -u NB_PROBER_KEY "$1" service create "$2" --url=http://evolution.test --os ubuntu --root "$3" 2>&1 | grep -q "other.test" && exit 1 || exit 0' _ "$NBP" "$NB_PROBER_KEY" "$URL_ROOT"
+rm -rf "$URL_ROOT"; env -u NB_PROBER_KEY -u NB_ASSURANCE_BASE_URL "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --root "$URL_ROOT" >/dev/null 2>&1 || true
 check "with no --url and no variable the default is not written into the service" bash -c '! grep -q NB_ASSURANCE_BASE_URL "$1" 2>/dev/null' _ "$URL_ROOT/etc/nb-prober/env"
-out=$(env -u NB_PROBER_KEY "$NBP" service install a b --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
+out=$(env -u NB_PROBER_KEY "$NBP" service create a b --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
 check "two arguments are refused" rc_is 1
-out=$(env -u NB_PROBER_KEY "$NBP" service uninstall x --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
-check "uninstall takes no key" rc_is 1
+out=$(env -u NB_PROBER_KEY "$NBP" service delete x --os ubuntu --root "$ARG_ROOT" 2>&1); rc=$?
+check "delete takes no key" rc_is 1
 check "install --root puts the key in a file only its owner can read" test "$(perm "$ROOT_DIR/etc/nb-prober/env")" = "-rw-------"
 check "and the directory too" test "$(perm "$ROOT_DIR/etc/nb-prober")" = "drwx------"
 check "the file holds the key" grep -qxF "NB_PROBER_KEY=$NB_PROBER_KEY" "$ROOT_DIR/etc/nb-prober/env"
@@ -290,38 +295,60 @@ check "it is the same script" cmp -s "$NBP" "$ROOT_DIR/usr/local/bin/nb-prober"
 check "the key is not in any command line" bash -c '! grep -q "$NB_PROBER_KEY" "$1"' _ "$SHIM_DIR/args.log"
 check "it checked the key against Evolution first" test "$(count_req 'GET http://evolution.test/api/v1/probe/monitors')" -ge 1
 NEWKEY="nbp_probe1_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-printf '%s' "$NEWKEY" | env -u NB_PROBER_KEY NB_PROBER_KEY="" "$NBP" service install --os ubuntu --root "$ROOT_DIR" >/dev/null 2>&1
+printf '%s' "$NEWKEY" | env -u NB_PROBER_KEY NB_PROBER_KEY="" "$NBP" service create --os ubuntu --root "$ROOT_DIR" >/dev/null 2>&1
 check "running it again with a new key replaces the key" grep -qxF "NB_PROBER_KEY=$NEWKEY" "$ROOT_DIR/etc/nb-prober/env"
 check "and leaves one key line" test "$(grep -c '^NB_PROBER_KEY=' "$ROOT_DIR/etc/nb-prober/env")" -eq 1
 
 rm -rf "$ROOT_DIR"; echo 401 > "$SHIM_DIR/list_code"
-out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
+out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
 check "a key Evolution refuses installs nothing" rc_is 1
 check "and says so" has "refused this key"
 check "nothing was written" test ! -e "$ROOT_DIR"
 rm "$SHIM_DIR/list_code"; touch "$SHIM_DIR/offline"
-out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
+out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
 check "with Evolution unreachable it warns and installs anyway" rc_is 0
 check "the warning says it keeps trying" has "keeps trying"
 rm "$SHIM_DIR/offline"
-out=$(env -u NB_PROBER_KEY "$NBP" service install --os ubuntu --root "$ROOT_DIR" < /dev/null 2>&1); rc=$?
+out=$(env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" < /dev/null 2>&1); rc=$?
 check "no key at all is refused, with the way to give one" has "pipe it in"
-out=$(printf '%s' "nbp_x_y" | env -u NB_PROBER_KEY "$NBP" service install --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
+out=$(printf '%s' "nbp_x_y" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$ROOT_DIR" 2>&1); rc=$?
 check "a key of the wrong shape is refused" has "not a probe key"
-out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os ubuntu 2>&1); rc=$?
-if [ "$(id -u)" -ne 0 ]; then check "without root (and without --root) it asks for sudo and writes nothing" has "run it with sudo"; fi
-run_nbp service uninstall --os ubuntu --root "$ROOT_DIR"
-check "uninstall removes the unit and the key file" test ! -e "$ROOT_DIR/etc/systemd/system/nb-prober.service" -a ! -e "$ROOT_DIR/etc/nb-prober/env"
+if [ "$(id -u)" -ne 0 ]; then
+  reset_shim
+  out=$(env -u NB_PROBER_KEY NB_PROBER_KEY="$NB_PROBER_KEY" "$NBP" service create --os ubuntu 2>&1); rc=$?
+  check "not root: it runs itself again through sudo, and says so" has "running it with sudo"
+  check "the sudo call is: env NB_PROBER_ELEVATED=1 <this script> service create ..." grep -q "^env NB_PROBER_ELEVATED=1 .*/nb-prober service create" "$SHIM_DIR/sudo.log"
+  check "the key from the environment goes along as the argument (sudo drops the environment)" grep -q "service create --os ubuntu $NB_PROBER_KEY" "$SHIM_DIR/sudo.log"
+  check "the key is not printed" hasnt "AAAAAAAAAAAAAAAA"
+  reset_shim
+  out=$(env NB_PROBER_ELEVATED=1 "$NBP" service create "$NB_PROBER_KEY" --os ubuntu 2>&1); rc=$?
+  check "already run through sudo and still not root: it stops (no loop)" has "still not root after sudo"
+  check "and does not call sudo again" test ! -e "$SHIM_DIR/sudo.log"
+  reset_shim
+  out=$(env -u NB_PROBER_KEY "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --dry-run 2>&1); rc=$?
+  check "--dry-run needs no root and does not call sudo" test ! -e "$SHIM_DIR/sudo.log"
+  out=$(env -u NB_PROBER_KEY "$NBP" service create "$NB_PROBER_KEY" --os ubuntu --root "$work/noroot" 2>&1); rc=$?
+  check "--root needs no root and does not call sudo" test ! -e "$SHIM_DIR/sudo.log"
+  reset_shim
+  out=$(env -u NB_PROBER_KEY NB_ASSURANCE_BASE_URL=http://evolution.test "$NBP" service status --os ubuntu 2>&1); rc=$?
+  check "status and logs go through sudo too" grep -q "service status" "$SHIM_DIR/sudo.log"
+  check "an address from the environment goes along as --url" grep -q -- "--url http://evolution.test" "$SHIM_DIR/sudo.log"
+  reset_shim
+  out=$(env -u NB_PROBER_KEY "$NBP" service logs -n 5 --os ubuntu 2>&1); rc=$?
+  check "logs keeps its options through sudo" grep -q "service logs -n 5" "$SHIM_DIR/sudo.log"
+fi
+run_nbp service delete --os ubuntu --root "$ROOT_DIR"
+check "delete removes the unit and the key file" test ! -e "$ROOT_DIR/etc/systemd/system/nb-prober.service" -a ! -e "$ROOT_DIR/etc/nb-prober/env"
 check "and says the state directory stays" has "state directory"
 out=$(env -u NB_PROBER_KEY "$NBP" service restart --os ubuntu --root "$work/none" 2>&1); rc=$?
-check "restart with nothing installed says to install first" has "is not installed"
+check "restart with no service says to create it first" has "there is no service"
 check "and fails" rc_is 1
-printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os ubuntu --root "$work/ctl" >/dev/null 2>&1
+printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os ubuntu --root "$work/ctl" >/dev/null 2>&1
 for v in start stop restart; do
   out=$(env -u NB_PROBER_KEY "$NBP" service $v --os ubuntu --root "$work/ctl" 2>&1); rc=$?
   check "service $v needs no key (installed, --root: not run)" rc_is 0
 done
-printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os macos --root "$work/ctlm" >/dev/null 2>&1
+printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os macos --root "$work/ctlm" >/dev/null 2>&1
 out=$(env -u NB_PROBER_KEY "$NBP" service restart --os macos --root "$work/ctlm" 2>&1); rc=$?
 check "the same on macOS" rc_is 0
 out=$(env -u NB_PROBER_KEY "$NBP" service restart now --os ubuntu --root "$work/ctl" 2>&1); rc=$?
@@ -337,14 +364,29 @@ check "service without a subcommand shows the usage" rc_is 1
 run_nbp service bogus
 check "an unknown service subcommand shows the usage" rc_is 1
 run_nbp -h
-check "-h lists the service command" has "service install [KEY]|start|stop|restart|status|logs|uninstall"
+check "-h lists the service command" has "service create [KEY]|start|stop|restart|status|logs|delete"
 
 echo "service (launchd, macOS)"
 MAC_ROOT="$work/macroot"; rm -rf "$MAC_ROOT"
-run_nbp service install --os macos --dry-run
+echo "service install / uninstall: the first release's names still work"
+ALIAS_ROOT="$work/alias"; rm -rf "$ALIAS_ROOT"
+out=$(env -u NB_PROBER_KEY "$NBP" service install "$NB_PROBER_KEY" --os ubuntu --root "$ALIAS_ROOT" 2>&1); rc=$?
+check "service install still creates the service" rc_is 0
+check "and wrote the unit" test -s "$ALIAS_ROOT/etc/systemd/system/nb-prober.service"
+out=$(env -u NB_PROBER_KEY "$NBP" service uninstall --os ubuntu --root "$ALIAS_ROOT" 2>&1); rc=$?
+check "service uninstall still deletes it" test ! -e "$ALIAS_ROOT/etc/systemd/system/nb-prober.service"
+run_nbp -h
+check "the usage shows create and delete, not install and uninstall" hasnt "service install"
+check "and does not mention uninstall" hasnt "uninstall"
+if [ "$(id -u)" -ne 0 ]; then
+  reset_shim
+  out=$(env -u NB_PROBER_KEY "$NBP" service install "$NB_PROBER_KEY" --os ubuntu 2>&1); rc=$?
+  check "the old name also goes through sudo (as typed, mapped again in the root run)" grep -q "service install" "$SHIM_DIR/sudo.log"
+fi
+run_nbp service create --os macos --dry-run
 check "macOS dry run shows the daemon file" has "com.nasebanal.nb-prober.plist"
 check "macOS dry run never prints the key's secret" hasnt "AAAAAAAAAAAAAAAA"
-out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service install --os macos --root "$MAC_ROOT" 2>&1); rc=$?
+out=$(printf '%s' "$NB_PROBER_KEY" | env -u NB_PROBER_KEY "$NBP" service create --os macos --root "$MAC_ROOT" 2>&1); rc=$?
 check "macOS install --root succeeds" rc_is 0
 PL="$MAC_ROOT/Library/LaunchDaemons/com.nasebanal.nb-prober.plist"
 check "the plist is private to its owner (it holds the key)" test "$(perm "$PL")" = "-rw-------"
@@ -355,9 +397,9 @@ check "the plist is valid XML (plutil, where available)" bash -c 'command -v plu
 check "it restarts itself and runs at boot" grep -q "<key>KeepAlive</key><true/>" "$PL"
 check "it does not run as root" grep -q "<key>UserName</key><string>nobody</string>" "$PL"
 check "the script is put on the path" test -x "$MAC_ROOT/usr/local/bin/nb-prober"
-run_nbp service uninstall --os macos --root "$MAC_ROOT"
-check "macOS uninstall removes the plist" test ! -e "$PL"
-run_nbp service install --os windows --dry-run
+run_nbp service delete --os macos --root "$MAC_ROOT"
+check "macOS delete removes the plist" test ! -e "$PL"
+run_nbp service create --os windows --dry-run
 check "an unknown platform is refused" has "ubuntu or macos"
 
 echo "buffer"
