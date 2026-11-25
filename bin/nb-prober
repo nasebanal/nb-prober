@@ -9,12 +9,12 @@
 #   list                                 list the monitors this probe checks
 #   check <url>                          check one URL the way a monitor would, and print the outcome (reports nothing)
 #   doctor                               check the setup (tools, key, Evolution, state directory)
-#   service install [KEY]|start|stop|restart|status|logs|uninstall  run it as a service that starts at boot and restarts itself (Ubuntu: systemd, macOS: launchd)
+#   service create [KEY]|start|stop|restart|status|logs|delete  run it as a service that starts at boot and restarts itself (Ubuntu: systemd, macOS: launchd)
 #   --install [DIR]                      link this script into DIR (default ~/.local/bin)
 #
 # Options:
 #   --once                               run: one pass, then exit (for cron or a test)
-#   --dry-run                            run: check and print, but report nothing and keep nothing; service install: show what it would do
+#   --dry-run                            run: check and print, but report nothing and keep nothing; service create: show what it would do
 #   --method GET|HEAD                    check: the request method (default GET)
 #   --expect-status CODE                 check: the status that counts as ok (default: any 2xx or 3xx)
 #   --keyword TEXT                       check: text the body must contain (GET only)
@@ -23,8 +23,7 @@
 #   --root DIR                           service: write under DIR, skip root and the service manager (packaging, tests)
 #   -f, -n N                             service logs: follow, and how many lines to show first (default 50)
 #   --os ubuntu|macos                    service: the platform (default: detected)
-#   --url URL                            Evolution's API (default https://api.assurance.nasebanal.com; same as NB_ASSURANCE_BASE_URL,
-#                                        which `sudo` does not pass on: use this with `sudo nb-prober service install`)
+#   --url URL                            Evolution's API (default https://api.assurance.nasebanal.com; same as NB_ASSURANCE_BASE_URL)
 #   --version                            show the version
 #
 # How it works: you register a probe in NASEBANAL Evolution and get its key. A push monitor there has the
@@ -52,7 +51,7 @@
 # doctor   check the setup without reporting anything: curl and jq installed, the key set and well
 #          formed, Evolution reachable and the key accepted, the state directory writable. Exits 1 if
 #          anything is flagged.
-# service  install: `sudo nb-prober service install nbp_...` puts this script at /usr/local/bin/nb-prober
+# service  create: `nb-prober service create nbp_...` puts this script at /usr/local/bin/nb-prober
 #          and runs it as a service that starts at boot and is restarted if it dies. Ubuntu (any Linux with systemd):
 #          the key goes to /etc/nb-prober/env (only root can read it), the unit to /etc/systemd/system/nb-prober.service
 #          (a locked-down user, state in /var/lib/nb-prober). macOS: a launchd daemon, /Library/LaunchDaemons/
@@ -61,11 +60,11 @@
 #          argument is in `ps` and in your shell history while this one command runs; the other two avoid `ps` only, and
 #          the service itself reads the key from a root-only file). It is checked against Evolution first: a refused key
 #          installs nothing.
-#          Run it again with a new key to replace the key. `uninstall` stops and removes the service (the state
+#          Run it again with a new key to replace the key. `delete` stops and removes the service (the state
 #          directory stays: results not yet sent are kept). `status` shows the service and its last log lines;
 #          `logs [-f] [-n N]` shows the log (journalctl on Ubuntu, /var/log/nb-prober.log on macOS).
 #          `restart`, `stop` and `start` use the stored key (none is given); `stop` lasts until the next boot. Needs
-#          root, curl and jq. `--root DIR` writes the files under DIR and does not touch the service manager, and
+#          root (when you are not root it runs itself again through sudo, once, so no sudo is typed), curl and jq. `--root DIR` writes the files under DIR and does not touch the service manager, and
 #          `--os ubuntu|macos` picks the platform instead of detecting it (both for packaging and tests).
 # --install  put `nb-prober` on your PATH: a symlink to this script in DIR (default ~/.local/bin,
 #          created if missing), so a `git pull` of this repository updates it. It does not replace
@@ -111,7 +110,11 @@ help() {
   text=$(sed -n '3,/^set -euo pipefail/{/^set -euo pipefail/!p;}' "$SELF" | sed 's/^# \{0,1\}//' |
     awk -v t="📡 NASEBANAL Prober - $desc" 'NR == 1 && $0 == "" { next } /^Commands:/ && !done { print t; print ""; done = 1 } { print }')
   if [ "${NB_PLUGIN_NAME-}" = "nb prober" ]; then
-    text=$(printf '%s\n' "$text" | sed -e '/^Also runs as:/d' -e 's/nb-prober/nb prober/g')
+    # `nb-prober` becomes `nb prober` where it is a command, not where it is a file name (/usr/local/bin/nb-prober, nb-prober.log,
+    # /etc/nb-prober/env). Twice: the first pass consumes the character after a match, so two commands side by side need a second.
+    text=$(printf '%s\n' "$text" | sed -e '/^Also runs as:/d' |
+      sed -E -e 's|(^\|[^/A-Za-z0-9._-])nb-prober([^A-Za-z0-9._/-]\|$)|\1nb prober\2|g' |
+      sed -E -e 's|(^\|[^/A-Za-z0-9._-])nb-prober([^A-Za-z0-9._/-]\|$)|\1nb prober\2|g')
   fi
   printf '%s\n' "$text"
 }
@@ -390,7 +393,7 @@ svc_platform() {
     case "$(uname -s)" in
       Linux)  SVC_OS=ubuntu ;;
       Darwin) SVC_OS=macos ;;
-      *) die "service install supports Ubuntu (Linux with systemd) and macOS; see the README for other systems" ;;
+      *) die "service create supports Ubuntu (Linux with systemd) and macOS; see the README for other systems" ;;
     esac
   fi
   case "$SVC_OS" in
@@ -476,9 +479,27 @@ svc_mac_load() {
   launchctl bootstrap system "$SVC_PLIST"
 }
 
+# Root is needed (the service lives in /etc, /Library and the service manager): when this is not root, run the same command again
+# through sudo, once, so that `nb-prober service create KEY` and `nb prober service create KEY` work without typing sudo (and
+# without `nb` having to be on root's PATH: sudo is given this script's real path). What sudo drops (the environment) goes along as
+# arguments: the key and the address, if they came from the environment. A --dry-run and --root (packaging, tests) need no root.
+svc_elevate() {
+  [ -z "$ROOT" ] || return 0
+  [ "$DRY" != 1 ] || return 0
+  [ "$(id -u)" -ne 0 ] || return 0
+  [ -z "${NB_PROBER_ELEVATED-}" ] || die "still not root after sudo: run it as root"
+  command -v sudo >/dev/null || die "this needs administrator rights and sudo was not found: run it as root"
+  local args=("${ORIG_ARGS[@]}") self
+  self=$(real_path "$SELF")
+  if [ "${POS[0]}" = create ] && [ "${#POS[@]}" -eq 1 ] && [ -n "$KEY" ]; then args+=("$KEY"); fi
+  [ "$URL_GIVEN" = 0 ] || args+=(--url "$API")
+  echo "nb-prober: this needs administrator rights; running it with sudo" >&2
+  exec sudo env NB_PROBER_ELEVATED=1 "$self" "${args[@]}"
+}
+
 svc_need_root() {
   [ -n "$ROOT" ] && return 0
-  [ "$(id -u)" -eq 0 ] || die "run it with sudo: it installs a system service"
+  [ "$(id -u)" -eq 0 ] || die "run it as root: it creates a system service"
   if [ "$SVC_OS" = ubuntu ]; then
     [ -d /run/systemd/system ] || die "systemd was not found on this machine: see the README for cron or nohup instead"
   else
@@ -486,17 +507,17 @@ svc_need_root() {
   fi
 }
 
-# service install: the probe's key comes from NB_PROBER_KEY or from stdin, is checked against Evolution, and then the
+# service create: the probe's key comes from NB_PROBER_KEY or from stdin, is checked against Evolution, and then the
 # script and the service are put in place and started.
-cmd_service_install() {
+cmd_service_create() {
   need curl; need jq
   svc_platform
   if [ -z "$KEY" ] && [ ! -t 0 ]; then IFS= read -r KEY || true; fi
-  [ -n "$KEY" ] || die "no key: give it as the argument (sudo nb-prober service install nbp_...), pipe it in, or set NB_PROBER_KEY"
+  [ -n "$KEY" ] || die "no key: give it as the argument (nb-prober service create nbp_...), pipe it in, or set NB_PROBER_KEY"
   need_key
   make_tmp
   if [ "$DRY" = 1 ]; then
-    echo "Would install on $SVC_OS (nothing is written):"
+    echo "Would create the service on $SVC_OS (nothing is written):"
     echo "  the script  -> $SVC_BIN"
     if [ "$SVC_OS" = ubuntu ]; then
       echo "  the key     -> $SVC_ENV (mode 600, for probe $PROBE)"
@@ -514,8 +535,8 @@ cmd_service_install() {
   http GET "$API/api/v1/probe/monitors"
   case "$HTTP_CODE" in
     200) ;;
-    401|403) die "Evolution at $API refused this key (HTTP $HTTP_CODE): nothing was installed. Was it replaced, or the probe deleted?" ;;
-    *) warn "cannot reach Evolution at $API now (HTTP $HTTP_CODE): installing anyway; the service keeps trying" ;;
+    401|403) die "Evolution at $API refused this key (HTTP $HTTP_CODE): nothing was created. Was it replaced, or the probe deleted?" ;;
+    *) warn "cannot reach Evolution at $API now (HTTP $HTTP_CODE): creating it anyway; the service keeps trying" ;;
   esac
   local self; self=$(real_path "$SELF")
   mkdir -p "$ROOT$(dirname "$SVC_BIN")"
@@ -545,14 +566,14 @@ cmd_service_install() {
     systemctl restart "$SVC_NAME"
     sleep 2
     if systemctl is-active --quiet "$SVC_NAME"; then up=1; else up=0; fi
-    logs="sudo nb-prober service logs -f"
+    logs="nb-prober service logs -f"
   else
     svc_mac_load
     launchctl enable "system/$SVC_LABEL" >/dev/null 2>&1 || true
     launchctl kickstart -k "system/$SVC_LABEL" >/dev/null 2>&1 || true
     sleep 2
     if launchctl print "system/$SVC_LABEL" 2>/dev/null | grep -q "state = running"; then up=1; else up=0; fi
-    logs="sudo nb-prober service logs -f"
+    logs="nb-prober service logs -f"
   fi
   if [ "${up:-0}" = 1 ]; then
     echo "nb-prober is running as a service (probe $PROBE). It starts at boot and restarts itself."
@@ -560,11 +581,11 @@ cmd_service_install() {
     warn "the service did not stay up: see the log ($logs)"
     return 1
   fi
-  echo "  status:  sudo nb-prober service status      logs:  $logs"
+  echo "  status:  nb-prober service status      logs:  $logs"
   echo "  Evolution shows the probe online within a minute."
 }
 
-cmd_service_uninstall() {
+cmd_service_delete() {
   svc_platform
   svc_need_root
   if [ "$SVC_OS" = ubuntu ]; then
@@ -587,12 +608,12 @@ cmd_service_status() {
     systemctl status "$SVC_NAME" --no-pager || true
     echo
     journalctl -u "$SVC_NAME" -n 15 --no-pager 2>/dev/null || true
-    echo; echo "Log: sudo nb-prober service logs [-f]   (journalctl -u $SVC_NAME)"
+    echo; echo "Log: nb-prober service logs [-f]   (journalctl -u $SVC_NAME)"
   else
     launchctl print "system/$SVC_LABEL" 2>/dev/null | sed -n '1,12p' || true
     echo
     tail -n 15 "$SVC_LOG" 2>/dev/null || true
-    echo; echo "Log: sudo nb-prober service logs [-f]   ($SVC_LOG)"
+    echo; echo "Log: nb-prober service logs [-f]   ($SVC_LOG)"
   fi
 }
 
@@ -606,26 +627,26 @@ cmd_service_logs() {
     if [ "$FOLLOW" = 1 ]; then exec journalctl -u "$SVC_NAME" -n "$LOG_LINES" -f; fi
     exec journalctl -u "$SVC_NAME" -n "$LOG_LINES" --no-pager
   else
-    [ -f "$SVC_LOG" ] || die "no log yet at $SVC_LOG: is the service installed? (sudo nb-prober service install KEY)"
-    [ -r "$SVC_LOG" ] || die "cannot read $SVC_LOG: run it with sudo"
+    [ -f "$SVC_LOG" ] || die "no log yet at $SVC_LOG: does the service exist? (nb-prober service create KEY)"
+    [ -r "$SVC_LOG" ] || die "cannot read $SVC_LOG: run it as root"
     if [ "$FOLLOW" = 1 ]; then exec tail -n "$LOG_LINES" -f "$SVC_LOG"; fi
     exec tail -n "$LOG_LINES" "$SVC_LOG"
   fi
 }
 
 # service start|stop|restart: use the key already stored, so none is given. `stop` lasts until the next boot (the service
-# is still registered and starts again then); `uninstall` is what removes it.
+# is still registered and starts again then); `delete` is what removes it.
 cmd_service_control() {
   local verb="$1"
   svc_platform
   svc_need_root
   if [ "$SVC_OS" = ubuntu ]; then
-    if [ -n "$ROOT" ]; then [ -f "$ROOT$SVC_UNIT" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"; echo "(--root: $verb not run)"; return 0; fi
-    [ -f "$SVC_UNIT" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"
+    if [ -n "$ROOT" ]; then [ -f "$ROOT$SVC_UNIT" ] || die "there is no service: run 'nb-prober service create KEY' first"; echo "(--root: $verb not run)"; return 0; fi
+    [ -f "$SVC_UNIT" ] || die "there is no service: run 'nb-prober service create KEY' first"
     systemctl "$verb" "$SVC_NAME"
   else
-    if [ -n "$ROOT" ]; then [ -f "$ROOT$SVC_PLIST" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"; echo "(--root: $verb not run)"; return 0; fi
-    [ -f "$SVC_PLIST" ] || die "the service is not installed: run 'sudo nb-prober service install KEY' first"
+    if [ -n "$ROOT" ]; then [ -f "$ROOT$SVC_PLIST" ] || die "there is no service: run 'nb-prober service create KEY' first"; echo "(--root: $verb not run)"; return 0; fi
+    [ -f "$SVC_PLIST" ] || die "there is no service: run 'nb-prober service create KEY' first"
     case "$verb" in
       stop)    launchctl bootout "system/$SVC_LABEL" >/dev/null 2>&1 || true ;;
       start)   if launchctl print "system/$SVC_LABEL" >/dev/null 2>&1; then launchctl kickstart "system/$SVC_LABEL"; else svc_mac_load; fi ;;
@@ -633,18 +654,22 @@ cmd_service_control() {
     esac
   fi
   case "$verb" in
-    stop) echo "Stopped until the next boot. 'sudo nb-prober service start' starts it now; 'service uninstall' removes it." ;;
-    *) echo "Done ($verb). 'sudo nb-prober service status' shows it." ;;
+    stop) echo "Stopped until the next boot. 'nb-prober service start' starts it now; 'service delete' removes it." ;;
+    *) echo "Done ($verb). 'nb-prober service status' shows it." ;;
   esac
 }
 
 cmd_service() {
   [ "${#POS[@]}" -ge 1 ] || usage
-  # `service install [KEY]`: the key may also be given as the argument (like `cloudflared service install <token>`)
-  if [ "${POS[0]}" = install ] && [ "${#POS[@]}" -eq 2 ]; then KEY="${POS[1]}"; elif [ "${#POS[@]}" -ne 1 ]; then usage; fi
+  # `install` / `uninstall` (the first release's names) still work; they read like installing nb-prober itself, so `create` / `delete` are the names shown.
+  case "${POS[0]}" in install) POS[0]=create ;; uninstall) POS[0]=delete ;; esac
+  # `service create [KEY]`: the key may also be given as the argument (like `cloudflared service install <token>`)
+  if [ "${POS[0]}" = create ] && [ "${#POS[@]}" -eq 2 ]; then KEY="${POS[1]}"; elif [ "${#POS[@]}" -ne 1 ]; then usage; fi
+  case "$LOG_LINES" in ''|*[!0-9]*) die "-n takes a number of lines" ;; esac   # before sudo: a typo should not ask for a password
+  case "${POS[0]}" in create|delete|status|logs|start|stop|restart) svc_elevate ;; esac
   case "${POS[0]}" in
-    install)   cmd_service_install ;;
-    uninstall) cmd_service_uninstall ;;
+    create)    cmd_service_create ;;
+    delete)    cmd_service_delete ;;
     status)    cmd_service_status ;;
     logs)      cmd_service_logs ;;
     start|stop|restart) cmd_service_control "${POS[0]}" ;;
@@ -688,6 +713,7 @@ case "${1:-}" in
   "") usage ;;
 esac
 umask 077
+ORIG_ARGS=("$@")
 cmd="$1"; shift
 while [ "$#" -gt 0 ]; do
   case "$1" in

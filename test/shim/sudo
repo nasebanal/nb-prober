@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# test/shim/sudo - a test double of sudo for test/run.sh: it logs what it was asked to run and runs nothing,
+# so a test can see that nb-prober would run itself again as root without ever prompting or becoming root.
+printf '%s\n' "$*" >> "${SHIM_DIR:?}/sudo.log"
+exit 0
