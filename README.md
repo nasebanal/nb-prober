@@ -107,7 +107,7 @@ shasum -a 256 -c nb-prober.sha256
 sudo mkdir -p /usr/local/bin && sudo install -m 755 nb-prober /usr/local/bin/nb-prober
 ```
 
-To pin a version, replace `latest/download` with `download/v0.1.0` (any release tag). Check it with `nb-prober --version`, and update by running the same commands again.
+To pin a version, replace `latest/download` with `download/v0.1.0` (any release tag). Check it with `nb-prober --version` (a copy cloned from `main` says `dev`; a release says its version), and update by running the same commands again.
 
 ## 🧰 Running it as a service
 

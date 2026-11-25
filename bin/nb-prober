@@ -97,7 +97,8 @@
 #   NB_PROBER_RETRY_WAIT        seconds before a failed check is repeated once (default 0)
 set -euo pipefail
 
-VERSION="0.1.0"
+# "dev" on main: the Release workflow sets this line from the tag (vX.Y.Z), so a release needs no version-bump PR
+VERSION="dev"
 SELF="${BASH_SOURCE[0]}"
 
 # Layout (the same in nb, nb-secrets, nb-quickstarts and nb-prober): Usage first, then one description line, "<emoji> NASEBANAL <Name> -

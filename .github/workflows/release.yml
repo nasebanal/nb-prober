@@ -1,7 +1,8 @@
 name: Release
 
-# A tag vX.Y.Z publishes the script as a release asset with its SHA-256, which is what Evolution's install command downloads.
-# The tag must match VERSION in bin/nb-prober, and the tests must pass on the tagged commit.
+# A tag vX.Y.Z publishes the script as a release asset with its SHA-256, which is what the README's Install steps download.
+# The version comes from the tag alone: the released copy has its VERSION line set to X.Y.Z, so nothing has to be bumped in a PR
+# first (bin/nb-prober on main says "dev"). The tests must pass on the tagged commit.
 on:
   push:
     tags:
@@ -15,15 +16,25 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: The tag matches the script's version
+      - name: The tag is vX.Y.Z
         run: |
-          v=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' bin/nb-prober)
-          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match VERSION=$v in bin/nb-prober"; exit 1; }
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1 ;;
+          esac
+          echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
       - name: Tests
         run: test/run.sh
-      - name: Checksum
-        run: cd bin && sha256sum nb-prober > nb-prober.sha256 && cat nb-prober.sha256
+      - name: Stamp the version and write the checksum
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          sed "s/^VERSION=\".*\"$/VERSION=\"$v\"/" bin/nb-prober > dist/nb-prober
+          chmod 755 dist/nb-prober
+          [ "$(sed -n 's/^VERSION="\(.*\)"$/\1/p' dist/nb-prober)" = "$v" ] || { echo "could not set VERSION"; exit 1; }
+          [ "$(dist/nb-prober --version)" = "nb-prober $v" ] || { echo "the released script reports a different version"; exit 1; }
+          cd dist && sha256sum nb-prober > nb-prober.sha256 && cat nb-prober.sha256
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" bin/nb-prober bin/nb-prober.sha256 --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/nb-prober dist/nb-prober.sha256 --title "$GITHUB_REF_NAME" --generate-notes

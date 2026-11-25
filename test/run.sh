@@ -68,7 +68,7 @@ out=$(NB_PLUGIN_NAME="nb prober" "$NBP" -h 2>&1); rc=$?
 check "run through nb, the name shown is nb prober" has "Usage: nb prober <command>"
 check "run through nb, the Also runs as line is dropped" hasnt "Also runs as"
 run_nbp --version
-check "--version" has "nb-prober 0."
+check "--version" has "nb-prober "
 run_nbp bogus
 check "an unknown command shows the usage and exits 1" rc_is 1
 run_nbp run --bogus
@@ -160,7 +160,7 @@ check "run: the buffer is empty after a successful report" test ! -s "$NB_PROBER
 check "run: the key arrived on stdin" test -s "$SHIM_DIR/auth.log"
 check "run: the args log is not empty (so the next check means something)" test -s "$SHIM_DIR/args.log"
 check "run: the key is not in any command line" bash -c '! grep -q "$NB_PROBER_KEY" "$1"' _ "$SHIM_DIR/args.log"
-check "run: the version is sent with every request" bash -c 'grep -q "^0\." "$1"' _ "$SHIM_DIR/version.log"
+check "run: the version is sent with every request" bash -c 'grep -Eq "^(dev|[0-9]+\.[0-9]+\.[0-9]+)$" "$1"' _ "$SHIM_DIR/version.log"
 check "run: the user agent names the prober" bash -c 'grep -q "NASEBANAL-Prober/" "$1"' _ "$SHIM_DIR/args.log"
 run_nbp run --once
 check "run: a monitor not yet due is not checked again" test "$(posts)" -eq 3
