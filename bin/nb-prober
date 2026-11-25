@@ -142,7 +142,7 @@ need_key() {
   printf '%s' "$KEY" | grep -Eq '^nbp_[A-Za-z0-9]{1,64}_[A-Za-z0-9_-]{43}$' || die "NB_PROBER_KEY is not a probe key (it looks like nbp_<id>_<secret>)"
   PROBE="${KEY#nbp_}"; PROBE="${PROBE%%_*}"
   case "$TICK" in ""|*[!0-9]*) die "NB_PROBER_TICK is a number of seconds" ;; esac
-  [ "$TICK" -ge 1 ] && [ "$TICK" -le 60 ] || die "NB_PROBER_TICK is 1 to 60 seconds (Evolution shows the probe offline after 2 minutes without a pass)"
+  if [ "$TICK" -lt 1 ] || [ "$TICK" -gt 60 ]; then die "NB_PROBER_TICK is 1 to 60 seconds (Evolution shows the probe offline after 2 minutes without a pass)"; fi
 }
 make_tmp() { TMP=$(mktemp -d "${TMPDIR:-/tmp}/nb-prober.XXXXXX"); trap 'rm -rf "$TMP"' EXIT; }
 
@@ -465,9 +465,8 @@ PLIST
 # macOS: (re)load the daemon. `bootout` returns before the job is gone, and a `bootstrap` straight after it fails with
 # "Bootstrap failed: 5: Input/output error", so wait until launchd no longer knows the job, and try the load twice.
 svc_mac_load() {
-  local i
   launchctl bootout "system/$SVC_LABEL" >/dev/null 2>&1 || true
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     launchctl print "system/$SVC_LABEL" >/dev/null 2>&1 || break
     sleep 0.5
   done

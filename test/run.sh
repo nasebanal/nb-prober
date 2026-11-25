@@ -253,6 +253,7 @@ check "without NB_PROBER_LOG the output stays on the terminal" has "reporting to
 echo "service (systemd)"
 reset_shim
 monitors "[]"
+# shellcheck disable=SC2012  # the mode string of one known path; `stat` differs between macOS and Linux
 perm() { ls -ld "$1" | cut -c1-10; }
 run_nbp service install --os ubuntu --dry-run
 check "service install --os ubuntu --dry-run shows the unit and writes nothing" has "Restart=always"
