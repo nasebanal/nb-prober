@@ -31,7 +31,7 @@ Evolution's external monitoring runs in the cloud, so it can only reach public U
 - **Silence is a failure**: if a probe stops reporting, Evolution shows the monitor as down with "no report" after the interval plus a grace period, so a dead probe never looks healthy.
 - **Survives a cut link**: results are buffered on disk and sent oldest first, 100 at a time, when the link returns; checking goes on from the last list of monitors in the meantime.
 
-> **Status:** push monitors are being added to Evolution (the design is in [nb-apps `docs/push-monitors-design.md`](https://github.com/nasebanal/nb-apps/blob/main/docs/push-monitors-design.md)). Until they are released, `nb-prober` has nothing to report to; `check` already works.
+> **Status:** push monitors are available in NASEBANAL Evolution (External monitoring: register a probe, then a monitor on the Private network).
 
 ## 📦 Requirements
 
