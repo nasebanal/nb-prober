@@ -12,6 +12,7 @@
 #   service create [KEY]|start|stop|restart|status|logs|delete  run it as a service that starts at boot and restarts itself (Ubuntu: systemd, macOS: launchd)
 #   --install [DIR]                      link this script into DIR (default ~/.local/bin)
 #   --uninstall [DIR]                    remove that link (only a link to this script; the service is separate: service delete)
+#   --complete [WORD...]                 print the tab-completion candidates (the last WORD is the one being typed)
 #
 # Options:
 #   --once                               run: one pass, then exit (for cron or a test)
@@ -770,11 +771,40 @@ cmd_uninstall() {
   fi
 }
 
+# Tab completion: `nb completion` runs `nb-prober --complete <words...>` for `nb prober <TAB>`. One candidate per
+# line, from fixed lists: nothing is read from Evolution and nothing is run.
+cmd_complete() {
+  local cur="${*: -1}" cmd="${1:-}" prev=""
+  [ "$#" -ge 1 ] || return 0
+  [ "$#" -ge 2 ] && prev="${*: -2:1}"
+  {
+    if [ "$#" -eq 1 ]; then
+      printf '%s\n' run list check doctor service
+    elif [ "$prev" = "--method" ]; then
+      printf '%s\n' GET HEAD
+    elif [ "$prev" = "--os" ]; then
+      printf '%s\n' ubuntu macos
+    elif [ "$cmd" = service ] && [ "$#" -eq 2 ] && [[ "$cur" != -* ]]; then
+      printf '%s\n' create start stop restart status logs delete
+    elif [[ "$cur" == -* ]]; then
+      case "$cmd" in
+        run)     printf '%s\n' --once --dry-run --url ;;
+        list)    printf '%s\n' --url ;;
+        check)   printf '%s\n' --method --expect-status --keyword --timeout-ms --url ;;
+        doctor)  printf '%s\n' --url ;;
+        service) printf '%s\n' --root --dry-run --force --os --url -f -n ;;
+      esac
+    fi
+  } | awk -v p="$cur" 'index($0, p) == 1'
+  return 0
+}
+
 case "${1:-}" in
   -h|--help|help) help; exit 0 ;;
   --version|version) echo "nb-prober $VERSION"; exit 0 ;;
   --install) shift; cmd_install "$@"; exit 0 ;;
   --uninstall) shift; cmd_uninstall "$@"; exit 0 ;;
+  --complete) shift; cmd_complete "$@"; exit 0 ;;
   "") usage ;;
 esac
 umask 077
