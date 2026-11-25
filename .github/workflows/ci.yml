@@ -9,10 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  # The required check (every apps/ repository has a job named `check` on every PR, no path filter).
   # The suite runs against a test double of curl (test/shim/curl), so no network and no token are involved.
-  check:
-    name: check (${{ matrix.os }})
+  test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -49,3 +48,15 @@ jobs:
         run: |
           shellcheck --version
           shellcheck bin/nb-prober test/run.sh test/shim/curl
+
+  # The required check (every apps/ repository has a job named `check` on every PR, no path filter; branch protection waits for
+  # that exact name). The matrix jobs have names of their own, so this one gathers them. `if: always()` so that a failed or skipped
+  # job fails it (a skipped required check would otherwise count as passed).
+  check:
+    needs: [test, shellcheck]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed
+        run: |
+          [ "${{ needs.test.result }}" = success ] && [ "${{ needs.shellcheck.result }}" = success ] || { echo "test: ${{ needs.test.result }}, shellcheck: ${{ needs.shellcheck.result }}"; exit 1; }
