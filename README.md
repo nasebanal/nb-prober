@@ -45,7 +45,7 @@ Evolution's external monitoring runs in the cloud, so it can only reach public U
 
 ### Environment
 - `NB_PROBER_KEY` (required): the probe's key, `nbp_<probe id>_<secret>`, issued when the probe is registered in Evolution (shown once; if it is lost, issue a new one).
-- `NB_ASSURANCE_BASE_URL`, `NB_PROBER_STATE_DIR`, `NB_PROBER_TICK` (1 to 60 seconds), `NB_PROBER_BUFFER_MAX`, `NB_PROBER_RETRY_WAIT` (optional): see `nb-prober -h`.
+- `NB_ASSURANCE_BASE_URL`, `NB_PROBER_STATE_DIR`, `NB_PROBER_TICK` (1 to 60 seconds), `NB_PROBER_BUFFER_MAX`, `NB_PROBER_RETRY_WAIT`, `NB_PROBER_LOG` and `NB_PROBER_LOG_MAX_BYTES` (optional; the log file is kept bounded, 5 MiB by default): see `nb-prober run -h`.
 
 ## ⚖️ Terms of use
 
@@ -150,7 +150,7 @@ A probe that is down for less than a monitor's interval plus grace (10 minutes b
 
 ## 📖 Commands
 
-Every command answers `-h`.
+`nb-prober -h` lists the commands and the options of every command. A command's own options and its full description are in `nb-prober <command> -h` (`run -h` also lists the environment variables, `check -h` how a response is judged).
 
 | Command | What it does |
 |---|---|
@@ -214,6 +214,9 @@ test/run.sh
 Needs `bash` and `jq`. Runs the whole suite against a test double of `curl` (`test/shim/curl`) that answers what `nb-prober` asks of Evolution and of the monitored targets from files, so no network and no real token is involved. It covers every command, the judgement of a response (status, keyword, HEAD, timeout, refused, a body cut at 1 MiB), a monitor's settings changing between passes, the buffering and flushing (including a cut link and batches of 100), the refusals (401 / 409, no key, a key of the wrong shape, a pass longer than 60 seconds), and that the key never appears in a command line or the output. The test double cannot catch a wrong `curl` flag: after changing how `nb-prober` calls `curl`, also try `nb-prober check` against a real server (a timeout, a redirect, a keyword, a refused port).
 
 ## 🔐 Security
+
+- The key is never put in a command line or a log while checking and reporting: `curl` reads it from stdin. `service create <KEY>` takes it as an argument, so it is in `ps` and your shell history while that one command runs; `NB_PROBER_KEY` or standard input avoid `ps`.
+- The only requests made are to Evolution (HTTPS) and to the URLs of the monitors you registered.
 
 See [SECURITY.md](SECURITY.md) for what is in scope and how to report a vulnerability privately.
 
