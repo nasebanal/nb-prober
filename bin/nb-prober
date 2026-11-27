@@ -139,6 +139,7 @@ help() {
       /^  --complete / { next }
       { print }' | as_typed)
   # Added after the renaming: the repository's address keeps its name.
+  # shellcheck disable=SC2016  # the backticks are text to print, not a command substitution
   printf '%s\n\n`%s <command> -h` explains a command and its options.\nMore: https://github.com/nasebanal/nb-prober\n' "$text" "$name"
 }
 # A titled part of the comment block, to its first blank line.
