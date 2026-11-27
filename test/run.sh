@@ -67,7 +67,11 @@ check "the usage says it also runs as nb prober" has "Also runs as: nb prober"
 out=$(NB_PLUGIN_NAME="nb prober" "$NBP" -h 2>&1); rc=$?
 check "run through nb, the name shown is nb prober" has "Usage: nb prober <command>"
 check "run through nb, the Also runs as line is dropped" hasnt "Also runs as"
+check "run through nb, the hint says nb prober" has '`nb prober <command> -h`'
+check "run through nb, the repository's address keeps its name" has "More: https://github.com/nasebanal/nb-prober"
+out=$(NB_PLUGIN_NAME="nb prober" "$NBP" --install -h 2>&1); rc=$?
 check "run through nb, a command in the text reads nb prober" has 'put `nb prober` on your PATH'
+out=$(NB_PLUGIN_NAME="nb prober" "$NBP" service -h 2>&1); rc=$?
 check "run through nb, a file name keeps its name (/usr/local/bin/nb-prober)" has "/usr/local/bin/nb-prober"
 check "run through nb, a log path keeps its name (/var/log/nb-prober.log)" has "/var/log/nb-prober.log"
 check "run through nb, a path is never rewritten (no 'nb prober.log' or '/nb prober')" bash -c '! printf "%s" "$1" | grep -qE "nb prober\.|/nb prober"' _ "$out"
@@ -79,7 +83,21 @@ check "an unknown command shows the usage and exits 1" rc_is 1
 run_nbp run --bogus
 check "an unknown option shows the usage and exits 1" rc_is 1
 run_nbp run -h
-check "-h after a command shows the help" has "NASEBANAL Prober"
+check "-h after a command shows that command's help" has "Usage: nb-prober run"
+check "run -h has its options" has "run --once"
+check "run -h has the environment" has "NB_PROBER_TICK"
+check "run -h has no other command's option" hasnt "check --keyword"
+run_nbp check -h
+check "check -h has how a response is judged" has "keyword_not_found"
+run_nbp check http://a.test/ --help
+check "-h later on the line shows the command's help too, and checks nothing" has "Usage: nb-prober check <url>"
+for c in list doctor service --install --uninstall; do
+  run_nbp "$c" -h
+  check "$c -h: its usage, exit 0" bash -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | head -1 | grep -qE "^Usage: nb-prober $3( |$)"' _ "$rc" "$out" "$c"
+done
+run_nbp -h
+check "-h is a screen: a line each, no command paragraph or option of one command" bash -c '[ "$(printf "%s\n" "$1" | wc -l)" -le 28 ] && ! printf "%s" "$1" | grep -qE "How it works|Environment:|--complete|--once|--keyword"' _ "$out"
+check "-h ends with where the rest is" has "More: https://github.com/nasebanal/nb-prober"
 
 echo "install"
 inst="$work/bin"
